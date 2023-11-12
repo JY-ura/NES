@@ -1,0 +1,20 @@
+dataset_and_model:
+  _target_: dataset_and_model.imagenet.get_dataset_and_model
+  data_path: datasets/imagenet
+  num_pics: 30
+  model_path: None
+  model_type: inceptionv3   #VIT
+
+num_labels: 1000
+image_size: 299
+num_channels: 3
+k: 10 #
+spd: 32
+epsilon: 0.1
+batch_delta_size: 32
+filterSize: 13
+stride: 13
+
+name: imagenet
+
+#VT group 14 nonoverlap

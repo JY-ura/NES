@@ -1,0 +1,11 @@
+dataset_and_model=cifar10 setup.algorithm.if_overlap=nonoverlapping dataset_and_model.filterSize=2 dataset_and_model.stride=2 targeted=untargeted gpu_idx=0
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,19 @@
+algorithm:
+  sigma: 0.001 # refers to sigma in the paper 
+  samples_per_draw: ${dataset_and_model.spd} # refers to n in the papaer
+  k: ${dataset_and_model.k} # top k indices, used in the paper, also refer to s in the paper
+  batch_delta_size: ${dataset_and_model.batch_delta_size}
+  plateu_length: 5
+  filterSize: ${dataset_and_model.filterSize}
+  stride: ${dataset_and_model.stride}
+  grouping_strategy: standard # 'kmeans   standard'
+  if_overlap: nonoverlapping
+  epsilon: ${dataset_and_model.epsilon}
+  perturb_rate: 0.1
+
+optimizer:
+  warmup_iter_num: 5
+  max_lr: 0.1
+  min_lr: 1e-6
+  momentum: 0.9 # momentum used in gradient transfromation 
+  drop_epoch: 30

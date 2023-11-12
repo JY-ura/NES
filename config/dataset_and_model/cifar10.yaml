@@ -1,0 +1,17 @@
+dataset_and_model:
+  _target_: dataset_and_model.cifar.get_dataset_and_model
+  data_path: datasets/cifar
+  num_pics: 100
+  model_path: model_files/cifar10_model.pth
+  model_type: cifar10
+
+num_labels: 10
+image_size: 32
+num_channels: 3
+k: 10   # untarget {nonoverlap 25 overlap 13}  target{nonoverlap 30 overlap 17}
+spd: 2
+batch_delta_size: 2
+epsilon: 0.1
+filterSize: 2
+stride: 2
+name: cifar10

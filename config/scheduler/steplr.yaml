@@ -1,0 +1,5 @@
+name: steplr
+max_lr: ${setup.optimizer.max_lr}  
+min_lr: ${setup.optimizer.min_lr}  
+drop_epoch: 30
+gamma: 0.95

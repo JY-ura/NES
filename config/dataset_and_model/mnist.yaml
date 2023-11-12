@@ -1,0 +1,20 @@
+dataset_and_model:
+  _target_: dataset_and_model.mnist.get_dataset_and_model
+  data_path: datasets/MNIST/raw
+  num_pics: 100
+  model_path: model_files/mnist_model.pth
+  model_type: mnist
+
+num_labels: 10
+image_size: 28
+num_channels: 1
+k: 10  # untarget {nonoverlap 23 overlap 13}  target{nonoverlap 30 overlap 17}
+spd: 2
+batch_delta_size: 2
+epsilon: 0.4
+filterSize: 2
+stride: 2
+
+# max_lr=4.038
+
+name: mnist
