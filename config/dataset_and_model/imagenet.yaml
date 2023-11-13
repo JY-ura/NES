@@ -16,5 +16,7 @@ filterSize: 13
 stride: 13
 
 name: imagenet
-eta: 0.5
+eta: 0.01
+
+grad_norm_threshold: 500
 #VT group 14 nonoverlap

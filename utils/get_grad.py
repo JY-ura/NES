@@ -23,8 +23,9 @@ def get_grad_estimation(
     batch_size: int,
     sigma: float,
     targeted: bool,
+    host,
     norm_theshold: float,
-    host) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
     """get gradient estimation on evaluate_img using nes
 
     Args:
@@ -51,15 +52,13 @@ def get_grad_estimation(
         loss = loss_fn(score, target_labels, targeted)
 
         loss = loss.reshape(-1, 1, 1, 1).repeat(evaluate_img.shape)
-        grad = loss * noise / sigma
+        grad = loss * noise / sigma / 2
 
         total_grads.append(torch.mean(grad, dim=0, keepdim=True))
         total_loss.append(torch.mean(loss))
         # torch.cuda.empty_cache()
 
     total_grads = torch.mean(torch.concat(total_grads), dim=0, keepdim=True)
-    if torch.norm(total_grads, p=2) < 0.1 * norm_theshold:
-        total_grads *= norm_theshold
     if torch.norm(total_grads, p=2) > norm_theshold:
         total_grads = total_grads/torch.norm(total_grads, p=2)*norm_theshold
     total_loss = torch.mean(torch.tensor(total_loss, device=host), dim=0)

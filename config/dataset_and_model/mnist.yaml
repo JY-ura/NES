@@ -19,3 +19,5 @@ stride: 2
 
 name: mnist
 eta: 0.5
+
+grad_norm_threshold: 20
