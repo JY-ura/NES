@@ -93,6 +93,7 @@ def esal(
     """
 
     targeted = cfg.targeted
+    last_delta = 0
 
     # algorithm
     alg = cfg.setup.algorithm
@@ -206,7 +207,8 @@ def esal(
             batch_size,
             masks: torch.Tensor,
             max_learning_rate,
-            cfg):
+            cfg,
+            last_delta):
         """perform easl attack on target img 
 
         Args:
@@ -225,15 +227,11 @@ def esal(
             admm_transformer = Adam(target_img)
             scheduler = get_lr_scheduler(**cfg.scheduler)
             num_queries = 0
-            delta = torch.rand(channels, image_size,
-                               image_size).to(device)
-            # delta = torch.tensor(0).to(device)
             flag = False
             lower_bond = torch.maximum(
                 torch.tensor(-epsilon).to(device), -0.5 - target_img)
             uppder_bond = torch.minimum(torch.tensor(
                 epsilon).to(device), 0.5 - target_img)
-            adv_image = target_img.detach().clone()
             # target_labels = F.one_hot(target_label, num_classes=num_labels).repeat(batch_size,
             #                                                                        1)  # create one-hot target labels as (batch_size, num_class)
 
@@ -242,24 +240,32 @@ def esal(
             k_increase = k_init
             last_query = cfg.max_query
 
-            # # initial attack
-            # l0_norm = torch.sum((delta != 0).float())
-            # l2_norm = torch.norm(delta)
-            # linf_norm = torch.max(torch.abs(delta))
-            # pro_delta = torch.clip(delta, lower_bond, uppder_bond)  # clip the delta to satisfy l_inf norm
-            # h = pro_delta ** 2 - 2 * pro_delta * delta # shape: [1, image.shape]
-            # unclip_delta = greedy_project(h, delta, masks.clone(), k)
-            # delta = torch.clip(unclip_delta, lower_bond, uppder_bond)
-            # adv_image = torch.clip(target_img.detach().clone() + delta, -0.5, 0.5)  # adversial samples
+            # last delta for initial
+            delta = last_delta if last_delta is not 0 else torch.rand(channels, image_size,
+                               image_size).to(device)
+            delta = torch.clip(delta, lower_bond, uppder_bond)*0.5
 
+            # random noist for ininital 
+            # delta =  torch.rand(channels, image_size,
+            #                    image_size).to(device)
+            # delta = delta_initialization(delta, masks.clone(), k, d)
+            # delta = delta.resize(channels, image_size, image_size)
+            # delta = torch.clip(delta, lower_bond, uppder_bond)
+
+            adv_image = torch.clip(target_img + delta, -0.5, 0.5)
+            # adv_image = target_img.clone()
+            l0_norm = torch.sum((delta != 0).float())
+            l2_norm = torch.norm(delta)
+            linf_norm = torch.max(torch.abs(delta))
             # for iter in range(cfg.max_iters):
             for iter in range(cfg.max_query):
 
                 # check if we can make an early stopping
                 pred = torch.argmax(model(adv_image, ))
+                num_queries += 1 
                 if is_sucessful(target_label, pred):
                     flag = True
-                    # print(f'[succ] Iter: {iter}, groups: {k}, query: {num_queries}, loss: {loss.cpu():.3f}, l0:{l0_norm.cpu():.0f}, l2:{l2_norm.cpu():.1f}, linf:{linf_norm.cpu():.2f}, prediction: {pred}, target_label:{target_label}')
+                    # print(f'[succ] Iter: {iter}, groups: {k}, query: {num_queries}, l0:{l0_norm.cpu():.0f}, l2:{l2_norm.cpu():.1f}, linf:{linf_norm.cpu():.2f}, prediction: {pred}, target_label:{target_label}')
                     break
 
                 target_labels = F.one_hot(target_label, num_classes=num_labels).repeat(batch_size,
@@ -301,9 +307,11 @@ def esal(
 
                 grads = admm_transformer.apply_gradient(grad=grads)
 
-                if cfg.scheduler.name == 'losslr':
+                if opti.name == 'clwars':
+                    lr = opti.max_lr * d_m.eta * torch.norm(adv_image, p=2) / (torch.norm(grads, p=2) + 1e-6)
+                elif opti.name == 'losslr':
                     lr = max_learning_rate
-                else:
+                else :
                     lr = next(scheduler)
                 #
                 delta = delta - lr * grads
@@ -316,8 +324,9 @@ def esal(
                 unclip_delta = greedy_project(h, delta, masks.clone(), k, d)
                 unclip_delta = unclip_delta.resize(
                     channels, image_size, image_size)
-
-                # # all pixels
+                
+                # ################
+                # # all pixels 
                 # # h = delta
                 # pro_delta = pro_delta.flatten()
                 # flatten_h = h.flatten()
@@ -334,22 +343,23 @@ def esal(
                 l0_norm = torch.sum((delta != 0).float())
                 l2_norm = torch.norm(delta)
                 linf_norm = torch.max(torch.abs(delta))
-                num_queries += samples_per_draw+1
+                num_queries += samples_per_draw
 
                 last_query -= samples_per_draw+1
                 if last_query - samples_per_draw-1 < 0:
                     break
-                if iter+1 % cfg.log_iters == 0:
-                    print(
-                        f'attack iter {iter}, loss: {loss.cpu():.5f}, group: {k}, spd: {samples_per_draw}, l0 norm:{l0_norm:.5f}, l2 norm: {l2_norm.cpu():.5f}, lr:{lr:.5f}')
+                if iter % cfg.log_iters == 0:
+                    pass
+                    # print(
+                    #     f'attack iter {iter}, loss: {loss.cpu():.5f}, group: {k}, spd: {samples_per_draw}, l0 norm:{l0_norm:.5f}, l2 norm: {l2_norm.cpu():.5f}, lr:{lr:.5f}')
             else:
                 # print("Fail Attack!")
                 pass
 
             if targeted == 'untargeted':
-                return adv_image, flag, num_queries, l0_norm.cpu(), l2_norm.cpu(), linf_norm.cpu(), pred.cpu()
+                return adv_image, flag, num_queries, l0_norm.cpu(), l2_norm.cpu(), linf_norm.cpu(), pred.cpu(), delta
             else:
-                return adv_image, flag, num_queries, l0_norm.cpu(), l2_norm.cpu(), linf_norm.cpu(), target_label.cpu()
+                return adv_image, flag, num_queries, l0_norm.cpu(), l2_norm.cpu(), linf_norm.cpu(), target_label.cpu(), delta
 
     def is_sucessful(target_label, pred):
         return (targeted == 'untargeted' and pred != target_label) or (targeted == 'targeted' and pred == target_label)
@@ -401,7 +411,7 @@ def esal(
         # print("No. ", i+1)
         i += 1
 
-        adv_image, flag, num_queries, l0_norm, l2_norm, linf_norm, target_label = attack(
+        adv_image, flag, num_queries, l0_norm, l2_norm, linf_norm, target_label, delta = attack(
             target_img=image.to(device),
             target_label=target_label.to(
                 device),
@@ -412,7 +422,8 @@ def esal(
             masks=masks.to(
                 device),
             max_learning_rate=max_learning_rate,
-            cfg=cfg
+            cfg=cfg,
+            last_delta=last_delta
         )
 
         if flag:
@@ -428,7 +439,7 @@ def esal(
             if cfg.save_image:
                 image_save(adv_image[0], image, orig_label, target_label,
                            dataset + '_' + model_name, targeted, i, grouping_strategy)
-
+            last_delta = delta
         else:
             index_fail.append(i)
 

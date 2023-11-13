@@ -10,3 +10,5 @@ utils/Kmeans.py
 utils/Optics.py
 __pycache__
 outputs/
+multirun/
+graph/

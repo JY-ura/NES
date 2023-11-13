@@ -37,25 +37,30 @@ def get_grad_estimation(
         Tuple[torch.Tensor, torch.Tensor]: _description_
     """
     total_batch_num = sample_per_draw // batch_size
-    grads = []
+    total_grads = []
     total_loss = []
+    total_grad_norm = []
     for _ in range(total_batch_num):
         noise = torch.normal(mean=0.0, std=1.0, size=(
             batch_size // 2,) + evaluate_img.shape[1:], device=host)
         # generate + delta and - delta for evaluation
         noise = torch.concat([noise, -noise], dim=0)
         evaluate_imgs = evaluate_img + noise * sigma
+
         score = model(evaluate_imgs)
         loss = loss_fn(score, target_labels, targeted)
+
         loss = loss.reshape(-1, 1, 1, 1).repeat(evaluate_img.shape)
-        grads.append(torch.mean(loss * noise / sigma, dim=0, keepdim=True))
+        grad = loss * noise / sigma
+
+        total_grads.append(torch.mean(grad, dim=0, keepdim=True))
         total_loss.append(torch.mean(loss))
         # torch.cuda.empty_cache()
 
-    grads = torch.mean(torch.concat(grads), dim=0, keepdim=True)
-    if torch.norm(grads, p=2) < 0.1 * norm_theshold:
-        grads *= norm_theshold
-    if torch.norm(grads, p=2) > norm_theshold:
-        grads = grads/torch.norm(grads, p=2)*norm_theshold
+    total_grads = torch.mean(torch.concat(total_grads), dim=0, keepdim=True)
+    if torch.norm(total_grads, p=2) < 0.1 * norm_theshold:
+        total_grads *= norm_theshold
+    if torch.norm(total_grads, p=2) > norm_theshold:
+        total_grads = total_grads/torch.norm(total_grads, p=2)*norm_theshold
     total_loss = torch.mean(torch.tensor(total_loss, device=host), dim=0)
-    return grads, total_loss
+    return total_grads, total_loss, 

@@ -47,33 +47,33 @@ def target(trail: optuna.Trial, cfg):
 
 @hydra.main(config_path='config', config_name='default', version_base=None)
 def main(cfg: DictConfig):
+
+    n_trials = 50
+
     target_with_cfg = partial(target, cfg=cfg)
     study = optuna.create_study(directions=['maximize', 'minimize'])
-    study.optimize(target_with_cfg, n_trials=10)
+    study.optimize(target_with_cfg, n_trials=n_trials)
     best_trails = study.best_trials
     print('parameters of parento front')
-    dataset = "graph/" + str(cfg.setup.algorithm.targeted) + \
-        '/' + str(cfg.setup.algorithm.dataset_name) + '/'
+    dataset = "graph/" + str(cfg.targeted) + \
+        '/' + str(cfg.dataset_and_model.name) + '/' + str(cfg.dataset_and_model.dataset_and_model.model_type) + '/'
     if not os.path.exists(dataset):
         os.makedirs(dataset)
     for best_trail in best_trails:
         print('params:', best_trail.params)
 
     fig = plot_pareto_front(study, target_names=['acc', 'query'])
-    plt.savefig(dataset + 'K_' + str(cfg.setup.algorithm.perturb_rate) +
-                '_' + str(cfg.setup.algorithm.if_overlap) + '_parento.jpg')
+    name = str(cfg.setup.algorithm.perturb_rate) + '_' + str(cfg.setup.algorithm.if_overlap) + '_' + str(n_trials) 
+
+    plt.savefig(dataset + name + '_parento.jpg')
     fig = plot_param_importances(study, target=lambda t: t.values[0])
-    plt.savefig(dataset + 'K_' + str(cfg.setup.algorithm.perturb_rate) +
-                '_' + str(cfg.setup.algorithm.if_overlap) + '_acc_importance.jpg')
+    plt.savefig(dataset + name + '_acc_importance.jpg')
     fig = plot_param_importances(study, target=lambda t: t.values[1])
-    plt.savefig(dataset + 'K_' + str(cfg.setup.algorithm.perturb_rate) +
-                '_' + str(cfg.setup.algorithm.if_overlap) + '_query_importance.jpg')
-    fig = plot_parallel_coordinate(study, target=lambda t: t.values[0])
-    plt.savefig(dataset + 'K_' + str(cfg.setup.algorithm.perturb_rate) +
-                '_' + str(cfg.setup.algorithm.if_overlap) + '_acc_cord.jpg')
-    fig = plot_parallel_coordinate(study, target=lambda t: t.values[1])
-    plt.savefig(dataset + 'K_' + str(cfg.setup.algorithm.perturb_rate) +
-                '_' + str(cfg.setup.algorithm.if_overlap) + '_query_cord.jpg')
+    plt.savefig(dataset + name + '_query_importance.jpg')
+    fig = plot_parallel_coordinate(study, target=lambda t: t.values[0], )
+    plt.savefig(dataset + name + '_acc_cord.jpg')
+    fig = plot_parallel_coordinate(study, target=lambda t: t.values[1], )
+    plt.savefig(dataset + name + '_query_cord.jpg')
 
 
 if __name__ == '__main__':

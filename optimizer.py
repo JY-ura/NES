@@ -83,6 +83,9 @@ def cos_scheduler(max_lr, min_lr, num_iter, warmup_iter_num, *args, **kwargs):
         yield curr_learning_rate
 
 def loss_lr(**kwargs):
+    yield 
+
+def clwars(**kwargs):
     pass
 
 def step_lr_scheduler(max_lr, min_lr=1e-6, drop_epoch=30, gamma=0.95):

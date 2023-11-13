@@ -9,8 +9,8 @@ num_labels: 10
 image_size: 28
 num_channels: 1
 k: 10  # untarget {nonoverlap 23 overlap 13}  target{nonoverlap 30 overlap 17}
-spd: 2
-batch_delta_size: 2
+spd: 30
+batch_delta_size: 30
 epsilon: 0.4
 filterSize: 2
 stride: 2
@@ -18,3 +18,4 @@ stride: 2
 # max_lr=4.038
 
 name: mnist
+eta: 0.5
