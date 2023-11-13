@@ -2,7 +2,8 @@ import numpy as np
 from torch.nn import functional as F
 import torch
 # from abc import ABC, abstractmethod
-
+import torch
+torch.optim.lr_scheduler.CosineAnnealingLR
 
 __all__ = ['cos_scheduler', 'Momentum']
 default_device = torch.device(0)
@@ -27,25 +28,62 @@ def margin_loss(score: torch.Tensor, target_labels: torch.Tensor, targeted: str)
         return torch.maximum(torch.tensor(0.0), torch.log(target_score + 1e-6) - torch.log(non_target_score + 1e-6)).reshape(-1)
 
 
+    """
+    name: coslr
+    max_lr: ${setup.optimizer.max_lr}
+    min_lr: ${setup.optimizer.min_lr}  
+    num_iter: 64
+    warmup_iter_num: 5
+    """
+
+# def cos_scheduler(max_lr, min_lr, num_iter, warmup_iter_num, *args, **kwargs):
+#     """cos learning rate schedulr
+
+#     Args:
+#         max_lr (_type_): max learning rate
+#         min_lr (_type_): min learning rate
+#         num_iter (_type_): total num of iteration (i.e. batch num, epoch num .. etc.)
+#         warmup_iter_num (_type_): number of iters to use warmup
+
+#     Yields:
+#         _type_: _description_
+#     """
+#     for current_step in range(warmup_iter_num):
+#         yield min_lr + (max_lr - min_lr) * current_step / warmup_iter_num
+#     for current_step in range(num_iter - warmup_iter_num):
+#         current_step += warmup_iter_num
+#         curr_learning_rate = 0.5 * (1 + np.cos(current_step * np.math.pi / num_iter)) * max_lr
+#         yield np.maximum(curr_learning_rate, min_lr)
+
+
 def cos_scheduler(max_lr, min_lr, num_iter, warmup_iter_num, *args, **kwargs):
-    """cos learning rate schedulr
+    """Cosine learning rate scheduler with oscillation
 
     Args:
-        max_lr (_type_): max learning rate
-        min_lr (_type_): min learning rate
-        num_iter (_type_): total num of iteration (i.e. batch num, epoch num .. etc.)
-        warmup_iter_num (_type_): number of iters to use warmup
+        max_lr (float): Maximum learning rate
+        min_lr (float): Minimum learning rate
+        num_iter (int): Total number of iterations (e.g., batch number, epoch number, etc.)
+        warmup_iter_num (int): Number of iterations to use warmup
 
     Yields:
-        _type_: _description_
+        float: Learning rate at each iteration
     """
     for current_step in range(warmup_iter_num):
         yield min_lr + (max_lr - min_lr) * current_step / warmup_iter_num
+
     for current_step in range(num_iter - warmup_iter_num):
         current_step += warmup_iter_num
-        curr_learning_rate = 0.5 * (1 + np.cos(current_step * np.math.pi / num_iter)) * max_lr
-        yield np.maximum(curr_learning_rate, min_lr)
+        curr_learning_rate = min_lr + 0.5 * (max_lr - min_lr) * (1 + np.cos(np.pi * current_step / (num_iter - warmup_iter_num)))
+        yield curr_learning_rate
 
+    # Continue oscillating beyond num_iter
+    while True:
+        current_step += 1
+        curr_learning_rate = min_lr + 0.5 * (max_lr - min_lr) * (1 + np.cos(np.pi * current_step / (num_iter - warmup_iter_num)))
+        yield curr_learning_rate
+
+def loss_lr(**kwargs):
+    pass
 
 def step_lr_scheduler(max_lr, min_lr=1e-6, drop_epoch=30, gamma=0.95):
     it = 0

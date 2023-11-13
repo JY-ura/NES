@@ -1,10 +1,10 @@
 defaults:
   - dataset_and_model: mnist
   - setup: default
-  - scheduler: coslr
+  - scheduler: losslr
   
-log_iters: 10000000
-gpu_idx: '0'
+log_iters: 10000000000
+gpu_idx: 0
 parallel_device_num: 1
 save_image: False
 save_result: False
@@ -12,3 +12,8 @@ load_pre_groups: True
 max_iters: 1000
 max_query: 20000
 targeted: untargeted
+
+wandb: False
+project: lr_scheduler
+name: ${dataset_and_model.name}_${scheduler.name}
+entity: yura1213

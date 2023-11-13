@@ -13,6 +13,8 @@ import os
 import shutil
 from utils.get_grad import *
 from utils.select_groups import *
+import warnings
+warnings.filterwarnings('ignore')
 
 loss_fn = margin_loss
 SEED = 0
@@ -20,7 +22,6 @@ torch.random.initial_seed()
 torch.random.manual_seed(0)
 np.random.seed(SEED)
 torch.cuda.manual_seed_all(SEED)
-
 
 
 def remove_error(idx):
@@ -66,10 +67,10 @@ def image_save(adv_image, image, orig_label, target_label, dataset, targeted, in
 
 
 def esal(
-        images: np.ndarray, 
-        labels: np.ndarray, 
-        model: torch.nn.Module, 
-        cfg: DictConfig, 
+        images: np.ndarray,
+        labels: np.ndarray,
+        model: torch.nn.Module,
+        cfg: DictConfig,
         norm_theshold=10):
     """perform esal_0+inf attack on target model
 
@@ -104,17 +105,13 @@ def esal(
     epsilon = alg.epsilon  # correspond to epsilon in the paper
     perturb_rate = alg.perturb_rate
     k_init = alg.k
-    # k_init = round(1.0*d.item()/filtersize.item()/filtersize.item()/channels*perturb_rate)
-    print("k_init", k_init)
 
     # optimizer
-    opti = cfg.setup.optimizer
+    opti = cfg.scheduler
     max_learning_rate = opti.max_lr
     min_learning_rate = opti.min_lr
-    image_size = torch.tensor(cfg.dataset_and_model.image_size)  # image size
-    num_labels = cfg.dataset_and_model.num_labels
-    momentum = opti.momentum
-    drop_epoch = opti.drop_epoch
+
+    momentum = cfg.setup.optimizer.momentum
 
     # dataset and model
     d_m = cfg.dataset_and_model
@@ -123,6 +120,8 @@ def esal(
     model_name = d_m.dataset_and_model.model_type
     filtersize = torch.tensor(d_m.filterSize)
     stride = d_m.stride
+    image_size = torch.tensor(d_m.image_size)  # image size
+    num_labels = d_m.num_labels
 
     d = channels*image_size*image_size
 
@@ -130,38 +129,41 @@ def esal(
         max_per_draw = 100
         if model_name == 'inceptionv3':
             image_size = torch.tensor(299)
-            max_perturb = round(1.0*d.item()/filtersize.item() /
-                                filtersize.item()/channels*perturb_rate)+20
+            max_group_num = round(1.0*d.item()/filtersize.item() /
+                                  filtersize.item()/channels*perturb_rate)
         elif model_name == 'VT':
             image_size = torch.tensor(224)
-            max_perturb = round(1.0*d.item()/filtersize.item() /
-                                filtersize.item()/channels*perturb_rate)+20
+            max_group_num = round(1.0*d.item()/filtersize.item() /
+                                  filtersize.item()/channels*perturb_rate)
     else:
         if alg.if_overlap == "overlapping":
-            max_perturb = 16  # cifar mnist untarget: 16 target: 20
+            max_group_num = 16  # cifar mnist untarget: 16 target: 20
         else:
-            max_perturb = 23  # cifar mnist untarget: 16 target: 20
+            max_group_num = 23  # cifar mnist untarget: 16 target: 20
         max_per_draw = 64
 
-    parallel_device_num = cfg.parallel_device_num
-    device_num = torch.cuda.device_count()
-    parallel_device_num = min(device_num, parallel_device_num)
-    device_ids = list(np.arange(parallel_device_num))
+    device = torch.device(
+        f"cuda:{cfg.gpu_idx}" if torch.cuda.is_available() else 'cpu')
+    model = model.to(device)
+    # parallel_device_num = cfg.parallel_device_num
+    # device_num = torch.cuda.device_count()
+    # parallel_device_num = min(device_num, parallel_device_num)
+    # device_ids = list(np.arange(parallel_device_num))
 
-    if parallel_device_num > 1:
-        print('using data parallel on', device_ids)
-        model = DataParallel(model, device_ids)
-        model = model.to(device_ids[0])
-    else:
-        model = model.to(device_ids[0])
-        print('using single gpu')
+    # if parallel_device_num > 1:
+    #     print('using data parallel on', device_ids)
+    #     model = DataParallel(model, device_ids)
+    #     model = model.to(device_ids[0])
+    # else:
+    #     model = model.to(device_ids[0])
+    #     print('using single gpu')
 
     # test model acc, get correct index and attack correct images
     # print(f'image shape: {images.shape}')
     # print(f'label shape: {labels.shape}')
 
-    images = torch.tensor(images).float().to(device_ids[0])
-    labels = torch.tensor(labels).to(device_ids[0])
+    images = torch.tensor(images).float().to(device)
+    labels = torch.tensor(labels).to(device)
 
     if targeted == 'targeted':
         print(
@@ -169,13 +171,13 @@ def esal(
         target_class = torch.tensor(
             [pseudorandom_target(index, num_labels, orig_label)
              for index, orig_label in enumerate(labels)], dtype=torch.int64
-        ).to(device_ids[0])
+        ).to(device)
     else:
         print(
             f"It performs untargeted attack on {dataset} dataset, {model_name} model!")
         target_class = labels
 
-    host = torch.device(device_ids[0])
+    host = torch.device(device)
 
     # validation on model
     with torch.no_grad():
@@ -197,13 +199,13 @@ def esal(
     print(f"Corrrectly classified images are {images.shape[0]}.")
 
     def attack(
-            target_img: torch.Tensor, 
-            target_label: torch.Tensor, 
+            target_img: torch.Tensor,
+            target_label: torch.Tensor,
             original_label: torch.Tensor,
-            samples_per_draw, 
-            batch_size, 
-            masks: torch.Tensor, 
-            max_learning_rate, 
+            samples_per_draw,
+            batch_size,
+            masks: torch.Tensor,
+            max_learning_rate,
             cfg):
         """perform easl attack on target img 
 
@@ -224,20 +226,20 @@ def esal(
             scheduler = get_lr_scheduler(**cfg.scheduler)
             num_queries = 0
             delta = torch.rand(channels, image_size,
-                               image_size).to(device_ids[0])
-            # delta = torch.tensor(0).to(device_ids[0])
+                               image_size).to(device)
+            # delta = torch.tensor(0).to(device)
             flag = False
             lower_bond = torch.maximum(
-                torch.tensor(-epsilon).to(device_ids[0]), -0.5 - target_img)
+                torch.tensor(-epsilon).to(device), -0.5 - target_img)
             uppder_bond = torch.minimum(torch.tensor(
-                epsilon).to(device_ids[0]), 0.5 - target_img)
+                epsilon).to(device), 0.5 - target_img)
             adv_image = target_img.detach().clone()
             # target_labels = F.one_hot(target_label, num_classes=num_labels).repeat(batch_size,
             #                                                                        1)  # create one-hot target labels as (batch_size, num_class)
 
             last_ls = []
             k = k_init
-            k_hat = k_init
+            k_increase = k_init
             last_query = cfg.max_query
 
             # # initial attack
@@ -250,14 +252,14 @@ def esal(
             # delta = torch.clip(unclip_delta, lower_bond, uppder_bond)
             # adv_image = torch.clip(target_img.detach().clone() + delta, -0.5, 0.5)  # adversial samples
 
-            # for iter in range(max_iters):
-            for iters in range(cfg.max_query):
+            # for iter in range(cfg.max_iters):
+            for iter in range(cfg.max_query):
 
                 # check if we can make an early stopping
                 pred = torch.argmax(model(adv_image, ))
                 if is_sucessful(target_label, pred):
                     flag = True
-                    # print(f'[succ] Iter: {iters}, groups: {k}, query: {num_queries}, loss: {loss.cpu():.3f}, l0:{l0_norm.cpu():.0f}, l2:{l2_norm.cpu():.1f}, linf:{linf_norm.cpu():.2f}, prediction: {pred}, target_label:{target_label}')
+                    # print(f'[succ] Iter: {iter}, groups: {k}, query: {num_queries}, loss: {loss.cpu():.3f}, l0:{l0_norm.cpu():.0f}, l2:{l2_norm.cpu():.1f}, linf:{linf_norm.cpu():.2f}, prediction: {pred}, target_label:{target_label}')
                     break
 
                 target_labels = F.one_hot(target_label, num_classes=num_labels).repeat(batch_size,
@@ -265,16 +267,16 @@ def esal(
 
                 # estimate the gradient
                 grads, loss = get_grad_estimation(
-                    model = model,
+                    model=model,
                     evaluate_img=adv_image,
                     target_labels=target_labels,
                     sample_per_draw=samples_per_draw,
                     batch_size=batch_size,
-                    sigma = sigma,
-                    targeted = targeted,
-                    norm_theshold = norm_theshold,
-                    host = host
-                    )
+                    sigma=sigma,
+                    targeted=targeted,
+                    norm_theshold=norm_theshold,
+                    host=host
+                )
 
                 # # compute the true gradient
                 # grads, loss = torch.func.grad_and_value(compute_loss)(adv_image, target_labels)
@@ -284,21 +286,26 @@ def esal(
                 if last_ls[-1] >= last_ls[0] and len(last_ls) == plateu_length:
                     samples_per_draw += batch_size
                     samples_per_draw = min(samples_per_draw, max_per_draw)
-                    # print("alter the sample and learning rate.")
                     batch_size = samples_per_draw
-                    k += round(k_hat * 0.9)
-                    k = min(k, max_perturb)
-                    k_hat *= 0.9
+
+                    k_increase *= 0.8
+                    k += round(k_increase)
+                    k = min(k, max_group_num)
+
                     if max_learning_rate > min_learning_rate:
                         max_learning_rate = max(
                             max_learning_rate * 0.9, min_learning_rate)
 
-                    # delta += torch.rand(channels,image_size,image_size).to(device_ids[0])
+                    # delta += torch.rand(channels,image_size,image_size).to(device)
                     last_ls = []
 
                 grads = admm_transformer.apply_gradient(grad=grads)
-                # lr = next(scheduler)
-                lr = max_learning_rate
+
+                if cfg.scheduler.name == 'losslr':
+                    lr = max_learning_rate
+                else:
+                    lr = next(scheduler)
+                #
                 delta = delta - lr * grads
                 # clip the delta to satisfy l_inf norm
                 pro_delta = torch.clip(delta, lower_bond, uppder_bond)
@@ -332,9 +339,9 @@ def esal(
                 last_query -= samples_per_draw+1
                 if last_query - samples_per_draw-1 < 0:
                     break
-                if iters+1 % cfg.log_iters == 0:
-                    print('attack iter {}, loss: {:.5f}, group: {}， spd: {}, l0 norm:{:.5f}, l2 norm: {:.5f}, lr:{:.5f}, prediction: {}, target_label:{}'.format(
-                        iters, loss.cpu(), k, samples_per_draw, l0_norm, l2_norm.cpu(), lr, pred.cpu(), target_label))
+                if iter+1 % cfg.log_iters == 0:
+                    print(
+                        f'attack iter {iter}, loss: {loss.cpu():.5f}, group: {k}, spd: {samples_per_draw}, l0 norm:{l0_norm:.5f}, l2 norm: {l2_norm.cpu():.5f}, lr:{lr:.5f}')
             else:
                 # print("Fail Attack!")
                 pass
@@ -391,21 +398,22 @@ def esal(
     i = 0
     index_fail = []
     for image, orig_label, target_label in zip(images, labels, target_class):
-        # print("No. ",i+1)
+        # print("No. ", i+1)
         i += 1
 
-        adv_image, flag, num_queries, l0_norm, l2_norm, linf_norm, target_label = attack(target_img=image.to(device_ids[0]),
-                                                                                         target_label=target_label.to(
-                                                                                             device_ids[0]),
-                                                                                         original_label=orig_label.to(
-                                                                                             device_ids[0]),
-                                                                                         samples_per_draw=samples_per_draw,
-                                                                                         batch_size=batch_size,
-                                                                                         masks=masks.to(
-                                                                                             device_ids[0]),
-                                                                                         max_learning_rate=max_learning_rate,
-                                                                                         cfg=cfg
-                                                                                         )
+        adv_image, flag, num_queries, l0_norm, l2_norm, linf_norm, target_label = attack(
+            target_img=image.to(device),
+            target_label=target_label.to(
+                device),
+            original_label=orig_label.to(
+                device),
+            samples_per_draw=samples_per_draw,
+            batch_size=batch_size,
+            masks=masks.to(
+                device),
+            max_learning_rate=max_learning_rate,
+            cfg=cfg
+        )
 
         if flag:
             orig_img = img_transform(image.cpu().numpy())

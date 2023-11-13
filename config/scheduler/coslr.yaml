@@ -1,5 +1,5 @@
 name: coslr
-max_lr: ${setup.optimizer.max_lr}
-min_lr: ${setup.optimizer.min_lr}  
-warmup_iter_num: 5
+max_lr: 1.0
+min_lr: 0.01
 num_iter: 64
+warmup_iter_num: 5

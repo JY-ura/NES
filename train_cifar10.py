@@ -118,7 +118,7 @@ def main(cfg: DictConfig):
     device = torch.device(
         f"cuda:{cfg.gpu_idx}" if torch.cuda.is_available() else 'cpu'
     )
-    print(cfg.dataset_and_model.dataset_and_model.data_path)
+
     train_loader, val_loader, _ = get_dataset(
         data_path=cfg.dataset_and_model.dataset_and_model.data_path)
     
@@ -134,6 +134,7 @@ def main(cfg: DictConfig):
     )
 
 def train(train_loader,val_loader, model, device, cfg):
+    
     main_logger = setup_logger(name='main')
     loss_fn = nn.CrossEntropyLoss(
         label_smoothing=0.1
@@ -232,9 +233,9 @@ def train(train_loader,val_loader, model, device, cfg):
         )
 
     date = datetime.datetime.now()
-    dir_name = f'./model_files/{cfg.dataset_and_model.dataset_and_model.model_type}/{cfg.dataset_and_model.name}/{date.year}.{date.month}.{date.day}.{date.hour}.{date.minute}.{date.second}'
+    dir_name = f"./model_files/{cfg.dataset_and_model['dataset_and_model']['model_type']}/{cfg.dataset_and_model['name']}/{date.year}.{date.month}.{date.day}.{date.hour}.{date.minute}.{date.second}"
     checkpoint_handler = Checkpoint(
-        to_save=model,
+        to_save={'model':model},
         save_handler=DiskSaver(dirname=dir_name, require_empty=False),
         filename_prefix='best',
         n_saved=2,

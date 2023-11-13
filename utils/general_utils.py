@@ -3,7 +3,8 @@ import os
 from PIL import Image
 import matplotlib.pyplot as plt
 from skimage.metrics import structural_similarity as ssim
-from optimizer import cos_scheduler, step_lr_scheduler
+from optimizer import cos_scheduler, step_lr_scheduler, loss_lr
+
 
 def pseudorandom_target(index, total_indices, true_class):
     rng = np.random.RandomState(index)
@@ -104,7 +105,8 @@ def calculate_ssim(img1, img2, dataset):
 
 lr_scheduler_dict={
     'coslr': cos_scheduler,
-    'steplr': step_lr_scheduler
+    'steplr': step_lr_scheduler,
+    'losslr': loss_lr
 }
 
 def get_lr_scheduler(**kwargs):

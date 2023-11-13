@@ -3,7 +3,7 @@ dataset_and_model:
   data_path: datasets/cifar
   num_pics: 100
   model_path: model_files/cifar10_model.pth
-  model_type: cifar10
+  model_type: resnet18
 
 num_labels: 10
 image_size: 32

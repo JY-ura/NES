@@ -1,7 +1,7 @@
 dataset_and_model:
   _target_: dataset_and_model.imagenet.get_dataset_and_model
   data_path: datasets/imagenet
-  num_pics: 30
+  num_pics: 10
   model_path: None
   model_type: inceptionv3   #VIT
 

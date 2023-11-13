@@ -12,8 +12,4 @@ algorithm:
   perturb_rate: 0.1
 
 optimizer:
-  warmup_iter_num: 5
-  max_lr: 0.1
-  min_lr: 1e-6
   momentum: 0.9 # momentum used in gradient transfromation 
-  drop_epoch: 30

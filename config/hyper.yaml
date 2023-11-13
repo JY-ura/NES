@@ -1,0 +1,17 @@
+method: random
+name: sweep_imagenet
+
+parameters:
+  scheduler:
+    values: ['coslr', 'steplr', 'losslr']
+
+  spd:
+    values: [2,4,6,8,10,12,14,16,18,20]
+
+  k:
+    values: [1,5,10,15]
+
+metric:
+  goal: maximize
+  name: asr
+  
