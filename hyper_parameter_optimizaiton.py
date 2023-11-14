@@ -23,10 +23,10 @@ def print_info(result: dict):
 
 def target(trail: optuna.Trial, cfg):
     scheduler = trail.suggest_categorical(
-        'scheduler', ['coslr', 'steplr', 'losslr', 'clwars'])
-    samples_per_draw = trail.suggest_int('sample_per_draw', 2, 100, 2)
-    max_learning_rate = trail.suggest_float('max_lr', 1, 100, log=True)
-    k_init = trail.suggest_int('k_init', 1, 20)
+        'scheduler', ['losslr', 'clwars'])
+    samples_per_draw = trail.suggest_int('sample_per_draw', 2, 50, 2)
+    max_learning_rate = trail.suggest_float('max_lr', 0.01, 5, log=True)
+    k_init = trail.suggest_int('k_init', 30, 53)
 
     with open(f'./config/scheduler/{scheduler}.yaml', 'r') as f:
         scheduler_cfg = yaml.load(f, Loader=yaml.FullLoader)

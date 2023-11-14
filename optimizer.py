@@ -36,24 +36,24 @@ def margin_loss(score: torch.Tensor, target_labels: torch.Tensor, targeted: str)
     warmup_iter_num: 5
     """
 
-# def cos_scheduler(max_lr, min_lr, num_iter, warmup_iter_num, *args, **kwargs):
-#     """cos learning rate schedulr
+def cos_scheduler_increase(max_lr, min_lr, num_iter, warmup_iter_num, *args, **kwargs):
+    """cos learning rate schedulr
 
-#     Args:
-#         max_lr (_type_): max learning rate
-#         min_lr (_type_): min learning rate
-#         num_iter (_type_): total num of iteration (i.e. batch num, epoch num .. etc.)
-#         warmup_iter_num (_type_): number of iters to use warmup
+    Args:
+        max_lr (_type_): max learning rate
+        min_lr (_type_): min learning rate
+        num_iter (_type_): total num of iteration (i.e. batch num, epoch num .. etc.)
+        warmup_iter_num (_type_): number of iters to use warmup
 
-#     Yields:
-#         _type_: _description_
-#     """
-#     for current_step in range(warmup_iter_num):
-#         yield min_lr + (max_lr - min_lr) * current_step / warmup_iter_num
-#     for current_step in range(num_iter - warmup_iter_num):
-#         current_step += warmup_iter_num
-#         curr_learning_rate = 0.5 * (1 + np.cos(current_step * np.math.pi / num_iter)) * max_lr
-#         yield np.maximum(curr_learning_rate, min_lr)
+    Yields:
+        _type_: _description_
+    """
+    for current_step in range(warmup_iter_num):
+        yield min_lr + (max_lr - min_lr) * current_step / warmup_iter_num
+    for current_step in range(num_iter - warmup_iter_num):
+        current_step += warmup_iter_num
+        curr_learning_rate = 0.5 * (1 + np.cos(current_step * np.math.pi / num_iter)) * max_lr
+        yield np.maximum(curr_learning_rate, min_lr)
 
 
 def cos_scheduler(max_lr, min_lr, num_iter, warmup_iter_num, *args, **kwargs):
@@ -97,6 +97,14 @@ def step_lr_scheduler(max_lr, min_lr=1e-6, drop_epoch=30, gamma=0.95):
             lr *= gamma
         yield np.maximum(lr, min_lr)
 
+
+def linear_lr_scheduer(max_lr, min_lr, num_iter, warmup_iter_num, *args, **kwargs):
+    for current_step in range(warmup_iter_num):
+        yield min_lr + (max_lr - min_lr) * current_step / warmup_iter_num
+    for current_step in range(num_iter - warmup_iter_num):
+        current_step += warmup_iter_num
+        curr_learning_rate = (max_lr - min_lr) * (1 - current_step / num_iter) + min_lr
+        yield np.maximum(curr_learning_rate, min_lr)
 
 class Momentum:
     def __init__(self, variabels: torch.Tensor, momentum, device=None) -> None:

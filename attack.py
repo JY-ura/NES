@@ -3,7 +3,7 @@ import torch
 from statistics import mean, median
 import numpy as np
 from omegaconf import DictConfig
-from optimizer import Momentum, cos_scheduler, margin_loss, cross_entorpy_loss, Adam, step_lr_scheduler
+from optimizer import Momentum, cos_scheduler, margin_loss, cross_entorpy_loss, Adam, step_lr_scheduler, cos_scheduler_increase
 from typing import Callable
 from typing import Tuple
 from torch.nn import functional as F
@@ -19,7 +19,7 @@ warnings.filterwarnings('ignore')
 loss_fn = margin_loss
 SEED = 0
 torch.random.initial_seed()
-torch.random.manual_seed(0)
+torch.random.manual_seed(SEED)
 np.random.seed(SEED)
 torch.cuda.manual_seed_all(SEED)
 
@@ -64,6 +64,35 @@ def image_save(adv_image, image, orig_label, target_label, dataset, targeted, in
              grouping_strategy, dataset, orgi_, target_label)
     img_save(np.abs(adv_image - ori_image), index, targeted+"_delta",
              grouping_strategy, dataset, orgi_, target_label)
+
+
+def init_delta_fun(name, shape, device, lower_bond, uppder_bond, epsilon, masks, k, d, last_delta, target_img):
+    if name == 'default':
+        # delta for initial
+        delta = torch.rand(shape).to(device)
+        adv_image = target_img
+        return delta, adv_image
+    elif name == 'boundary':
+        # boundary -epsilon, epsilon
+        delta_sign = torch.bernoulli(
+            0.5 * torch.ones(shape)).to(device)
+        delta = (2*delta_sign-1)*epsilon
+        delta = delta_initialization(delta, masks.clone(), k, d)
+        delta = delta.resize(*shape) + torch.rand(shape).to(device)*0.1
+        delta = torch.clip(delta, lower_bond, uppder_bond)
+    elif name == 'random':
+        # random noist for ininital with k groups
+        delta = torch.rand(shape).to(device)
+        delta = delta_initialization(delta, masks.clone(), k, d)
+        delta = delta.resize(*shape)
+        delta = torch.clip(delta, lower_bond, uppder_bond)
+    elif name == 'last_delta':
+        # last delta for initial
+        delta = last_delta if last_delta is not 0 else torch.rand(
+            shape).to(device)
+        delta = torch.clip(delta, lower_bond, uppder_bond)*0.5
+    adv_image = torch.clip(target_img + delta, -0.5, 0.5)
+    return delta, adv_image
 
 
 def esal(
@@ -126,21 +155,15 @@ def esal(
     d = channels*image_size*image_size
 
     if dataset == 'imagenet':
-        max_per_draw = 100
+        max_per_draw = 80
         if model_name == 'inceptionv3':
             image_size = torch.tensor(299)
-            max_group_num = round(1.0*d.item()/filtersize.item() /
-                                  filtersize.item()/channels*perturb_rate)
-        elif model_name == 'VT':
+        elif model_name == 'VIT':
             image_size = torch.tensor(224)
-            max_group_num = round(1.0*d.item()/filtersize.item() /
-                                  filtersize.item()/channels*perturb_rate)
     else:
-        if alg.if_overlap == "overlapping":
-            max_group_num = 16  # cifar mnist untarget: 16 target: 20
-        else:
-            max_group_num = 23  # cifar mnist untarget: 16 target: 20
-        max_per_draw = 64
+        max_per_draw = 50
+    max_group_num = round(1.0*d.item()/filtersize.item() /
+                          filtersize.item()/channels*perturb_rate)
 
     device = torch.device(
         f"cuda:{cfg.gpu_idx}" if torch.cuda.is_available() else 'cpu')
@@ -225,6 +248,8 @@ def esal(
                 variabels=target_img, momentum=momentum)
             admm_transformer = Adam(target_img)
             scheduler = get_lr_scheduler(**cfg.scheduler)
+            alpha_scheduler = cos_scheduler_increase(cfg.alpha, 0.01, 1000, 0)
+            # alpha = cfg.alpha
             num_queries = 0
             flag = False
             lower_bond = torch.maximum(
@@ -238,33 +263,17 @@ def esal(
             k = k_init
             k_increase = k_init
             last_query = cfg.max_query
-            # ## 0 delta for initial
-            # delta = torch.tensor(0.)
+            shape = (channels, image_size, image_size)
+            delta, adv_image = init_delta_fun(cfg.initial_delta, shape, device,
+                                              lower_bond, uppder_bond, epsilon, masks, k, d, last_delta, target_img)
 
-            # ## last delta for initial
-            # delta = last_delta if last_delta is not 0 else torch.rand(channels, image_size, image_size).to(device)
-            # delta = torch.clip(delta, lower_bond, uppder_bond)*0.5
-
-            # ## random noist for ininital with k groups
-            # delta =  torch.rand(channels, image_size,
-            #                    image_size).to(device)
-            # delta = delta_initialization(delta, masks.clone(), k, d)
-            # delta = delta.resize(channels, image_size, image_size)
-            # delta = torch.clip(delta, lower_bond, uppder_bond)
-
-            # ## boundary -epsilon, epsilon
-            delta_sign = torch.bernoulli(
-                0.5 * torch.ones(channels, image_size, image_size)).to(device)
-            delta = (2*delta_sign-1)*epsilon
-            delta = delta_initialization(delta, masks.clone(), k, d)
-            delta = delta.resize(channels, image_size, image_size)
-            delta = torch.clip(delta, lower_bond, uppder_bond)
-
-            adv_image = target_img
-            # adv_image = torch.clip(target_img + delta, -0.5, 0.5)
             l0_norm = torch.sum((delta != 0).float())
             l2_norm = torch.norm(delta)
             linf_norm = torch.max(torch.abs(delta))
+            pre_k_grad = cfg.pre_k_grad
+            alpha = cfg.alpha
+            pre_grad_list = []
+            grads = None
             # # for iter in range(cfg.max_iters):
             for iter in range(cfg.max_query):
 
@@ -289,8 +298,15 @@ def esal(
                     sigma=sigma,
                     targeted=targeted,
                     host=host,
-                    norm_theshold=d_m.grad_norm_threshold
+                    norm_theshold=d_m.grad_norm_threshold,
+                    grads=grads,
+                    pre_grad_list=pre_grad_list,
+                    pre_k_grad=pre_k_grad,
+                    alpha=alpha
                 )
+
+                alpha = next(alpha_scheduler)
+                # print(alpha)
 
                 # # compute the true gradient
                 # grads, loss = torch.func.grad_and_value(compute_loss)(adv_image, target_labels, model, targeted)
@@ -360,9 +376,8 @@ def esal(
                 if last_query - samples_per_draw-1 < 0:
                     break
                 if iter % cfg.log_iters == 0:
-                    pass
-                # print(
-                #     f'attack iter {iter}, loss: {loss.cpu():.5f}, group: {k}, spd: {samples_per_draw}, l0 norm:{l0_norm:.5f}, l2 norm: {l2_norm.cpu():.5f}, lr:{lr:.5f}')
+                    print(
+                        f'attack iter {iter}, loss: {loss.cpu():.5f}, group: {k}, spd: {samples_per_draw}, l0 norm:{l0_norm:.5f}, l2 norm: {l2_norm.cpu():.5f}, lr:{lr:.5f}')
             else:
                 # print("Fail Attack!")
                 pass

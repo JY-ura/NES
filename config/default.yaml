@@ -1,7 +1,7 @@
 defaults:
-  - dataset_and_model: mnist
+  - dataset_and_model: cifar10
   - setup: default
-  - scheduler: clwars
+  - scheduler: losslr
   
 log_iters: 10000000000
 gpu_idx: 0
@@ -12,6 +12,10 @@ load_pre_groups: True
 max_iters: 1000
 max_query: 20000
 targeted: untargeted
+pre_k_grad: 2
+alpha: 0.5
+
+initial_delta: random
 
 wandb: False
 project: lr_scheduler

@@ -112,6 +112,7 @@ lr_scheduler_dict={
     'steplr': step_lr_scheduler,
     'losslr': loss_lr,
     'clwars': clwars
+    
 }
 
 def get_lr_scheduler(**kwargs):

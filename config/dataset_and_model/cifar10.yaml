@@ -17,3 +17,5 @@ stride: 2
 name: cifar10
 eta: 0.5
 grad_norm_threshold: 50
+
+max_lr: 2.27
