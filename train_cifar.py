@@ -157,30 +157,37 @@ def main(cfg: DictConfig):
         model = model_dict[cfg.model](pretrained=True)
         model.fc = nn.Linear(model.fc.in_features, cfg.dataset_and_model.num_labels)
         nn.init.xavier_uniform_(model.fc.weight)
+        weight_name = 'fc.weight'
+        bias_name = 'fc.bias'
+        parameters = model.fc.parameters()
     elif cfg.model == 'mobilenet_v2':
         model = model_dict[cfg.model](pretrained=True)
-        print(model)
         model.classifier[1] = nn.Linear(model.classifier[1].in_features, cfg.dataset_and_model.num_labels)
         nn.init.xavier_normal_(model.classifier[1].weight)
+        weight_name = 'classifier.1.weight'
+        bias_name = 'classifier.1.bias'
+        parameters = model.classifier[1].parameters()
     model.to(device)
 
     train(
-        train_loader,
-        val_loader,
-        model,
-        device,
-        cfg = wandb.run.config
+        train_loader=train_loader,
+        val_loader=val_loader,
+        model=model,
+        device=device,
+        cfg = wandb.run.config,
+        weight_name=weight_name,
+        bias_name = bias_name,
+        parameters = parameters
     )
 
-def train(train_loader,val_loader, model, device, cfg):
+def train(train_loader,val_loader, model, device, cfg, weight_name, bias_name, parameters):
     
     main_logger = setup_logger(name='main')
     loss_fn = nn.CrossEntropyLoss(
         label_smoothing=0.1
     ).to(device)
-    # optimizer = torch.optim.SGD(model.parameters(), lr=cfg.lr, momentum=0.9, weight_decay=2e-5)
-    para_1x = [param for name, param in model.named_parameters() if name not in ['fc.weight', 'fc.bias']]
-    optimizer = torch.optim.SGD([{'params': para_1x}, {'params': model.fc.parameters(), 'lr': cfg.lr * 10}],
+    para_1x = [param for name, param in model.named_parameters() if name not in [weight_name, bias_name]]
+    optimizer = torch.optim.SGD([{'params': para_1x}, {'params': parameters, 'lr': cfg.lr * 10}],
                                     lr=cfg.lr, weight_decay=0.005)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer=optimizer, T_max=cfg.T_max)
     scheduler = create_lr_scheduler_with_warmup(
