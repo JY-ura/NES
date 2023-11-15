@@ -209,6 +209,8 @@ def esal(
         torch.cuda.empty_cache()
         # remove_id = torch.where(pred != labels)
         # remove_error(remove_id)
+        # print(pred)
+        # print(labels)
         correct_idx = pred == labels
 
         acc = torch.mean(correct_idx.float())

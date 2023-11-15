@@ -3,12 +3,14 @@ defaults:
   - setup: default
 
 
-epoch: 10
+epoch: 30
 warmup_epoch: 5
 use_amp: True
 report_every: 5
 T_max: 64
-lr: 0.01
+lr: 0.001
+batchsize: 128
+model: mobilenet_v2 # resnet18
 
 gpu_idx: 0
 project: DNN attack-Train resnet

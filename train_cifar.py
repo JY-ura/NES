@@ -1,6 +1,6 @@
 
 import os
-os.environ['WANDB_MODE'] = 'offline'
+os.environ['WANDB_MODE'] = 'online'
 import hydra
 from omegaconf import DictConfig, OmegaConf
 import wandb
@@ -21,23 +21,32 @@ from typing import *
 from torch.cuda.amp import grad_scaler
 from ignite.engine import Engine
 from d2l import torch as d2l
+from dataset_and_model.cifar import CIFAR
+from torch.utils.data import TensorDataset, DataLoader
 
 
-def get_dataset(data_path, num_pic=10000):
-    # transform_train = transforms.Compose([
-    #     transforms.RandomCrop(32, padding=4),
-    #     transforms.RandomHorizontalFlip(),
-    #     transforms.ToTensor(),
-    #     transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-    # ])
+def get_dataset_from_pytorch(data_path, num_pic=10000):
+    transform_train = transforms.Compose([
+        transforms.RandomCrop(32, padding=4),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        transforms.Normalize(
+            mean=[0.4914, 0.4822, 0.4465],
+            std=[0.2023, 0.1994, 0.2010]
+        )
+    ])
 
-    # transform_test = transforms.Compose([
-    #     transforms.ToTensor(),
-    #     transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-    # ])
+    transform_test = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize(
+            mean=[0.4914, 0.4822, 0.4465],
+            std=[0.2023, 0.1994, 0.2010]
+        )
+    ])
+
     data = torchvision.datasets.CIFAR10(
         root=data_path,
-        train=True, download=True)
+        train=True, download=True, transform=transform_train)
     train_data, val_data = random_split(data, [0.9,0.1], torch.Generator().manual_seed(0))
 
     train_loader = DataLoader(train_data, batch_size=128, shuffle=True, num_workers=4)
@@ -45,10 +54,28 @@ def get_dataset(data_path, num_pic=10000):
     
     test_data = torchvision.datasets.CIFAR10(
         root=data_path,
-        train=False, download=True,)
+        train=False, download=True, transform=transform_test)
     test_loader = DataLoader(test_data, batch_size=128, shuffle=False, num_workers=4)
 
     return train_loader, val_loader, test_loader
+
+def get_data(data_path, num_pic=10000):
+    cifar_dataset = CIFAR(data_path=data_path, num_pic=num_pic)
+    train_img, train_lab = cifar_dataset.train_data, cifar_dataset.train_labels
+    val_img, val_lab = cifar_dataset.validation_data, cifar_dataset.validation_labels
+    
+    train_img_tensor = torch.tensor(train_img, )
+    train_lab_tensor = torch.argmax(torch.tensor(train_lab, ), dim=-1)
+    val_img_tensor = torch.tensor(val_img, )
+    val_lab_tensor = torch.argmax(torch.tensor(val_lab,), dim=-1)
+
+    batch_size = 128
+    train_set = TensorDataset(train_img_tensor, train_lab_tensor)
+    val_set = TensorDataset(val_img_tensor, val_lab_tensor)
+
+    train_loader = DataLoader(train_set, batch_size, shuffle=True)
+    val_loader = DataLoader(val_set, batch_size, shuffle=False)
+    return train_loader, val_loader
 
 def get_trainer(
         model: nn.Module,
@@ -102,7 +129,10 @@ def log_metrics(logger, epoch, elapsed, tag, metrics):
         f"\nEpoch {epoch} - Evaluation time (seconds): {elapsed:.2f} - {tag} metrics:\n {metrics_output}"
     )
 
-
+model_dict={
+    'resnet18': torchvision.models.resnet18,
+    'mobilenet_v2': torchvision.models.mobilenet_v2,
+}
 
 @hydra.main(config_path='config', config_name='train_cifar', version_base=None)
 def main(cfg: DictConfig):
@@ -119,12 +149,19 @@ def main(cfg: DictConfig):
         f"cuda:{cfg.gpu_idx}" if torch.cuda.is_available() else 'cpu'
     )
     
-    train_loader, val_loader, _ = get_dataset(
+    train_loader, val_loader = get_data(
         data_path='./datasets/cifar')
     
-    model = torchvision.models.resnet18(pretrained=True)
-    model.fc = nn.Linear(model.fc.in_features, cfg.dataset_and_model.num_labels)
-    nn.init.xavier_uniform_(model.fc.weight)
+    # resnet18 
+    if cfg.model == 'resnet18':
+        model = model_dict[cfg.model](pretrained=True)
+        model.fc = nn.Linear(model.fc.in_features, cfg.dataset_and_model.num_labels)
+        nn.init.xavier_uniform_(model.fc.weight)
+    elif cfg.model == 'mobilenet_v2':
+        model = model_dict[cfg.model](pretrained=True)
+        print(model)
+        model.classifier[1] = nn.Linear(model.classifier[1].in_features, cfg.dataset_and_model.num_labels)
+        nn.init.xavier_normal_(model.classifier[1].weight)
     model.to(device)
 
     train(
@@ -144,7 +181,7 @@ def train(train_loader,val_loader, model, device, cfg):
     # optimizer = torch.optim.SGD(model.parameters(), lr=cfg.lr, momentum=0.9, weight_decay=2e-5)
     para_1x = [param for name, param in model.named_parameters() if name not in ['fc.weight', 'fc.bias']]
     optimizer = torch.optim.SGD([{'params': para_1x}, {'params': model.fc.parameters(), 'lr': cfg.lr * 10}],
-                                    lr=cfg.lr, weight_decay=0.001)
+                                    lr=cfg.lr, weight_decay=0.005)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer=optimizer, T_max=cfg.T_max)
     scheduler = create_lr_scheduler_with_warmup(
         lr_scheduler=scheduler, 
@@ -260,7 +297,7 @@ def train(train_loader,val_loader, model, device, cfg):
             type='model',
             description='train dnn network',
             metadata={
-                'dataset': cfg.dataset_and_model.name,
+                'dataset': cfg.dataset_and_model['name'],
                 'batch_size': cfg.batchsize,
                 'lr': cfg.lr
             }

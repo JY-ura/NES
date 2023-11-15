@@ -95,7 +95,6 @@ class MNISTModelTorch(nn.Module):
         return x
 
 def get_dataset_and_model(data_path: str, num_pics:int,  model_path: str, model_type) -> Tuple[np.ndarray, np.ndarray, torch.nn.Module]:
-    np.random.seed
     mnist_dataset = MNIST(data_path=data_path, num_pic=num_pics)
     model = MNISTModelTorch()
     model.load_state_dict(torch.load(model_path))
