@@ -12,8 +12,9 @@ load_pre_groups: True
 max_iters: 1000
 max_query: 20000
 targeted: untargeted
-pre_k_grad: 2
+subspace_dim: 2
 alpha: 0.5
+using_subspace: False
 
 initial_delta: random
 

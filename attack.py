@@ -1,17 +1,13 @@
-from statistics import median, mean
 import torch
-from statistics import mean, median
 import numpy as np
 from omegaconf import DictConfig
-from optimizer import Momentum, cos_scheduler, margin_loss, cross_entorpy_loss, Adam, step_lr_scheduler, cos_scheduler_increase
-from typing import Callable
-from typing import Tuple
+from optimizer import Momentum, margin_loss, Adam, cos_scheduler_increase
 from torch.nn import functional as F
 from utils.general_utils import *
 from torch.nn import DataParallel
 import os
 import shutil
-from utils.get_grad import *
+from utils.get_grad import ZOEstimator
 from utils.select_groups import *
 import warnings
 warnings.filterwarnings('ignore')
@@ -126,13 +122,13 @@ def esal(
     # algorithm
     alg = cfg.setup.algorithm
     sigma = alg.sigma  # refers to sigma in the paper
-    samples_per_draw = alg.samples_per_draw
-    batch_size = alg.batch_delta_size  # max batch size to evaluate the output
+    sample_num = alg.samples_per_draw
+    max_sample_num_per_forward = alg.batch_delta_size  # max batch size to evaluate the output
     plateu_length = alg.plateu_length
     grouping_strategy = alg.grouping_strategy
     if_overlap = alg.if_overlap
     epsilon = alg.epsilon  # correspond to epsilon in the paper
-    perturb_rate = alg.perturb_rate
+    perturb_pixels_ratio = alg.perturb_rate
     k_init = alg.k
 
     # optimizer
@@ -150,7 +146,7 @@ def esal(
     filtersize = torch.tensor(d_m.filterSize)
     stride = d_m.stride
     image_size = torch.tensor(d_m.image_size)  # image size
-    num_labels = d_m.num_labels
+    num_classes = d_m.num_labels
 
     d = channels*image_size*image_size
 
@@ -163,7 +159,7 @@ def esal(
     else:
         max_per_draw = 50
     max_group_num = round(1.0*d.item()/filtersize.item() /
-                          filtersize.item()/channels*perturb_rate)
+                          filtersize.item()/channels*perturb_pixels_ratio)
 
     device = torch.device(
         f"cuda:{cfg.gpu_idx}" if torch.cuda.is_available() else 'cpu')
@@ -192,7 +188,7 @@ def esal(
         print(
             f"It performs targeted attack on {dataset} dataset, {model_name} model!")
         target_class = torch.tensor(
-            [pseudorandom_target(index, num_labels, orig_label)
+            [pseudorandom_target(index, num_classes, orig_label)
              for index, orig_label in enumerate(labels)], dtype=torch.int64
         ).to(device)
     else:
@@ -224,58 +220,50 @@ def esal(
     print(f"Corrrectly classified images are {images.shape[0]}.")
 
     def attack(
-            target_img: torch.Tensor,
+            target_image: torch.Tensor,
             target_label: torch.Tensor,
-            original_label: torch.Tensor,
-            samples_per_draw,
-            batch_size,
+            sample_num: int,
+            max_sample_num_per_forward: int,
             masks: torch.Tensor,
-            max_learning_rate,
-            cfg,
-            last_delta):
+            max_learning_rate: float,
+            cfg: DictConfig,
+            last_delta: torch.Tensor):
         """perform easl attack on target img 
 
         Args:
-            target_img (torch.Tensor): target attack img
+            target_image (torch.Tensor): target attack img
             target_label (torch.Tensor): label for target attack
-            original_label (torch.Tensor): original label for the image
-            samples_per_draw (int): times of estimating gradient in each attacking
-            batch_size (int):  The parallel dimensions of a picture
-            index: Initial group index
+            sample_num (int): times of estimating gradient in each attacking
+            max_sample_num_per_forward (int):  The parallel dimensions of a picture
+            masks (torch.Tensor): the mask for grouping
+            max_learning_rate (float): max learning rate
+            cfg (DictConfig): setup for algorithm
+            last_delta (torch.Tensor): the delta for last attacking
         """
         with torch.no_grad():
             # initialization
-            target_img = target_img.reshape((1,) + target_img.shape)
+            target_image = target_image.reshape((1,) + target_image.shape)
             gradient_transformer = Momentum(
-                variabels=target_img, momentum=momentum)
-            admm_transformer = Adam(target_img)
+                variabels=target_image, momentum=momentum)
+            admm_transformer = Adam(target_image)
             scheduler = get_lr_scheduler(**cfg.scheduler)
             alpha_scheduler = cos_scheduler_increase(cfg.alpha, 0.01, 1000, 0)
-            # alpha = cfg.alpha
             num_queries = 0
             flag = False
             lower_bond = torch.maximum(
-                torch.tensor(-epsilon).to(device), -0.5 - target_img)
+                torch.tensor(-epsilon).to(device), -0.5 - target_image)
             uppder_bond = torch.minimum(torch.tensor(
-                epsilon).to(device), 0.5 - target_img)
+                epsilon).to(device), 0.5 - target_image)
             # target_labels = F.one_hot(target_label, num_classes=num_labels).repeat(batch_size,
             #                                                                        1)  # create one-hot target labels as (batch_size, num_class)
-
-            last_ls = []
+            last_loss_list = []
             k = k_init
             k_increase = k_init
-            last_query = cfg.max_query
+            remain_query = cfg.max_query
             shape = (channels, image_size, image_size)
             delta, adv_image = init_delta_fun(cfg.initial_delta, shape, device,
-                                              lower_bond, uppder_bond, epsilon, masks, k, d, last_delta, target_img)
+                                              lower_bond, uppder_bond, epsilon, masks, k, d, last_delta, target_image)
 
-            l0_norm = torch.sum((delta != 0).float())
-            l2_norm = torch.norm(delta)
-            linf_norm = torch.max(torch.abs(delta))
-            pre_k_grad = cfg.pre_k_grad
-            alpha = cfg.alpha
-            pre_grad_list = []
-            grads = None
             # # for iter in range(cfg.max_iters):
             for iter in range(cfg.max_query):
 
@@ -284,41 +272,24 @@ def esal(
                 num_queries += 1
                 if is_sucessful(target_label, pred):
                     flag = True
-                    # print(f'[succ] Iter: {iter}, groups: {k}, query: {num_queries}, l0:{l0_norm.cpu():.0f}, l2:{l2_norm.cpu():.1f}, linf:{linf_norm.cpu():.2f}, prediction: {pred}, target_label:{target_label}')
+                    print(f'[succ] Iter: {iter}, groups: {k}, query: {num_queries}, prediction: {pred}, target_label:{target_label}')
                     break
 
-                target_labels = F.one_hot(target_label, num_classes=num_labels).repeat(batch_size,
+                target_labels = F.one_hot(target_label, num_classes=num_classes).repeat(max_sample_num_per_forward,
                                                                                        1)  # create one-hot target labels as (batch_size, num_class)
 
-                # # estimate the gradient
-                grads, loss = get_grad_estimation(
-                    model=model,
+                grads, loss = grad_estimator.zo_estimation(
                     evaluate_img=adv_image,
                     target_labels=target_labels,
-                    sample_per_draw=samples_per_draw,
-                    batch_size=batch_size,
-                    sigma=sigma,
-                    targeted=targeted,
-                    host=host,
-                    norm_theshold=d_m.grad_norm_threshold,
-                    grads=grads,
-                    pre_grad_list=pre_grad_list,
-                    pre_k_grad=pre_k_grad,
-                    alpha=alpha
+                    subspace_estimation=cfg.using_subspace,
                 )
 
-                alpha = next(alpha_scheduler)
-                # print(alpha)
-
-                # # compute the true gradient
-                # grads, loss = torch.func.grad_and_value(compute_loss)(adv_image, target_labels, model, targeted)
-
-                last_ls.append(loss)
-                last_ls = last_ls[-plateu_length:]
-                if last_ls[-1] >= last_ls[0] and len(last_ls) == plateu_length:
-                    samples_per_draw += batch_size
-                    samples_per_draw = min(samples_per_draw, max_per_draw)
-                    batch_size = samples_per_draw
+                last_loss_list.append(loss)
+                last_loss_list = last_loss_list[-plateu_length:]
+                if last_loss_list[-1] >= last_loss_list[0] and len(last_loss_list) == plateu_length:
+                    sample_num += max_sample_num_per_forward
+                    sample_num = min(sample_num, max_per_draw)
+                    max_sample_num_per_forward = sample_num
 
                     k_increase *= 0.8
                     k += round(k_increase)
@@ -327,22 +298,17 @@ def esal(
                     if max_learning_rate > min_learning_rate:
                         max_learning_rate = max(
                             max_learning_rate * 0.9, min_learning_rate)
+                    last_loss_list = []
 
-                    # delta += torch.rand(channels,image_size,image_size).to(device)
-                    last_ls = []
-
-                grads = admm_transformer.apply_gradient(grad=grads)
 
                 if opti.name == 'clwars':
-                    lr = opti.max_lr * d_m.eta * \
-                        torch.norm(adv_image, p=2) / \
+                    lr = opti.max_lr * d_m.eta * torch.norm(adv_image, p=2) / \
                         (torch.norm(grads, p=2) + 1e-6)
                 elif opti.name == 'losslr':
                     lr = max_learning_rate
                 else:
                     lr = next(scheduler)
-                # print(torch.norm(grads, p=2))
-                #
+
                 delta = delta - lr * grads
                 # clip the delta to satisfy l_inf norm
                 pro_delta = torch.clip(delta, lower_bond, uppder_bond)
@@ -367,23 +333,31 @@ def esal(
 
                 # clip the delta to satisfy l_inf norm
                 delta = torch.clip(unclip_delta, lower_bond, uppder_bond)
-                adv_image = torch.clip(target_img + delta, -0.5, 0.5)
+                adv_image = torch.clip(target_image + delta, -0.5, 0.5)
 
-                l0_norm = torch.sum((delta != 0).float())
-                l2_norm = torch.norm(delta)
-                linf_norm = torch.max(torch.abs(delta))
-                num_queries += samples_per_draw
+                num_queries += sample_num
 
-                last_query -= samples_per_draw+1
-                if last_query - samples_per_draw-1 < 0:
+                remain_query -= sample_num+1
+                if remain_query <= sample_num-1 and remain_query > 1:
+                    sample_num = remain_query if remain_query % 2==0 else remain_query-1
+                    max_sample_num_per_forward = sample_num
+                elif remain_query <= 0:
                     break
+                grads = admm_transformer.apply_gradient(grad=grads)
+                grad_estimator.previous_grads = grads.detach().clone()
+                grad_estimator.sample_num = sample_num
+                grad_estimator.max_sample_num_per_forward = max_sample_num_per_forward
+                # grad_estimator.alpha = next(alpha_scheduler)
+
                 if iter % cfg.log_iters == 0:
                     print(
-                        f'attack iter {iter}, loss: {loss.cpu():.5f}, group: {k}, spd: {samples_per_draw}, l0 norm:{l0_norm:.5f}, l2 norm: {l2_norm.cpu():.5f}, lr:{lr:.5f}')
+                        f'attack iter {iter}, loss: {loss.cpu():.5f}, group: {k}, spd: {sample_num}, lr:{lr:.3f}')
             else:
-                # print("Fail Attack!")
+                print("Fail Attack!")
                 pass
-
+            l0_norm = torch.sum((delta != 0).float())
+            l2_norm = torch.norm(delta)
+            linf_norm = torch.max(torch.abs(delta))
             if targeted == 'untargeted':
                 return adv_image, flag, num_queries, l0_norm.cpu(), l2_norm.cpu(), linf_norm.cpu(), pred.cpu(), delta
             else:
@@ -436,34 +410,37 @@ def esal(
     i = 0
     index_fail = []
     for image, orig_label, target_label in zip(images, labels, target_class):
-        # print("No. ", i+1)
+        print("No. ", i+1)
         i += 1
+        
+        # # initialize the zeoestimator
+        grad_estimator = ZOEstimator(
+            model=model,
+            sample_num=sample_num,
+            max_sample_num_per_forward=max_sample_num_per_forward,
+            sigma=sigma,
+            targeted=targeted,
+            grad_clip_threshold=d_m.grad_norm_threshold,
+            alpha=cfg.alpha,
+            subspace_dim=cfg.subspace_dim,
+            device=device
+        )
 
         adv_image, flag, num_queries, l0_norm, l2_norm, linf_norm, target_label, delta = attack(
-            target_img=image.to(device),
-            target_label=target_label.to(
-                device),
-            original_label=orig_label.to(
-                device),
-            samples_per_draw=samples_per_draw,
-            batch_size=batch_size,
-            masks=masks.to(
-                device),
+            target_image=image.to(device),
+            target_label=target_label.to(device),
+            sample_num=sample_num,
+            max_sample_num_per_forward=max_sample_num_per_forward,
+            masks=masks.to(device),
             max_learning_rate=max_learning_rate,
             cfg=cfg,
             last_delta=last_delta
         )
-
+        
+        orig_img = img_transform(image.cpu().numpy())
+        adv_img = img_transform(adv_image[0].cpu().numpy())
         if flag:
-            orig_img = img_transform(image.cpu().numpy())
-            adv_img = img_transform(adv_image[0].cpu().numpy())
-            psnr_list.append(calculate_psnr(orig_img, adv_img, dataset))
-            ssim_list.append(calculate_ssim(orig_img, adv_img, dataset))
-            l0_norm_list.append(l0_norm)
-            l2_norm_list.append(l2_norm)
-            linf_norm_list.append(linf_norm)
             acc_count += 1
-
             if cfg.save_image:
                 image_save(adv_image[0], image, orig_label, target_label,
                            dataset + '_' + model_name, targeted, i, grouping_strategy)
@@ -472,6 +449,11 @@ def esal(
             index_fail.append(i)
 
         num_queries_list.append(num_queries)
+        l0_norm_list.append(l0_norm)
+        l2_norm_list.append(l2_norm)
+        linf_norm_list.append(linf_norm)
+        psnr_list.append(calculate_psnr(orig_img, adv_img, dataset))
+        ssim_list.append(calculate_ssim(orig_img, adv_img, dataset))
 
     acc = acc_count / torch.sum(correct_idx.float())
     print("fail_index:\n", index_fail)

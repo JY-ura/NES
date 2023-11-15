@@ -91,9 +91,13 @@ class CIFARModelTorch(nn.Module):
 
 def get_dataset_and_model(data_path: str, num_pics:int,  model_path: str, model_type) -> Tuple[np.ndarray, np.ndarray, torch.nn.Module]:
     cifar_dataset = CIFAR(data_path=data_path, num_pic=num_pics)
-    if 'resnet' == model_type:
+    if 'resnet18' == model_type:
         model = models.resnet18(pretrained=False)
         model.fc = nn.Linear(512, 10)
+        model.load_state_dict(torch.load(model_path))
+    elif 'mobilenet_v2' == model_type:
+        model = models.mobilenet_v2(pretrained=False)
+        model.classifier[1] = nn.Linear(1280, 10)
         model.load_state_dict(torch.load(model_path))
     else:
         model = CIFARModelTorch()
