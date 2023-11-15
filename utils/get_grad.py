@@ -3,99 +3,85 @@ from typing import Tuple
 import torch.nn as nn
 from optimizer import margin_loss
 
-# compute the true gradient
+class GradEstimation:
+    def __init__(self, model, sample_per_draw, batch_size, sigma, targeted, norm_threshold, alpha, pre_k_grad, host) -> None:
+        self.model = model
+        self.sample_per_draw = sample_per_draw
+        self.batch_size = batch_size
+        self.sigma = sigma
+        self.targeted = targeted
+        self.norm_threshold = norm_threshold
+        self.alpha = alpha
+        self.pre_k_grad = pre_k_grad
+        self.host = host
+        self.sigma_sqrt = 0.1
+        self.grads = None
+        self.pre_grad_list = []
+        self.loss_func = margin_loss
 
+    def get_grad_estimation(
+        self,
+        evaluate_img: torch.Tensor,
+        target_labels: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
 
-def compute_loss(evaluate_img: torch.Tensor, target_labels: torch.Tensor, model, targeted,):
-    score = model(evaluate_img)
-    loss = margin_loss(score, target_labels, targeted)
-    return torch.squeeze(loss, 0)
+        total_batch_num = self.sample_per_draw // self.batch_size
+        total_grads = []
+        total_loss = []
+        for _ in range(total_batch_num):
+            noise = torch.normal(mean=0.0, std=1.0, size=(
+                self.batch_size // 2,) + evaluate_img.shape[1:], device=self.host)
 
+            if self.grads is not None:
+                self.pre_grad_list.append(self.grads.flatten())
+                if len(self.pre_grad_list) == self.pre_k_grad:
+                    pre_grad = torch.stack(
+                        self.pre_grad_list, dim=0).to(self.host)
+                    noise = self.sample(
+                        pre_grad.transpose(0, 1),
+                        evaluate_img.flatten().shape[0]
+                    )
+                    noise = noise.view((noise.size(0),) +
+                                       evaluate_img[0].size())
+                    self.pre_grad_list.pop(0)
 
-loss_fn = margin_loss
-# @torch.no_grad()
+            # generate + delta and - delta for evaluation
+            noise = torch.concat([noise, -noise], dim=0)
 
+            evaluate_imgs = evaluate_img + noise * self.sigma
 
-def sample(grads, d, host, batch, pre_k_grad=3, alpha=0.5, sigma_sqrt=0.1):
-    noise_full = torch.rand(batch//2, d, 1).to(host)
-    nosie_subspace = torch.rand(batch//2, pre_k_grad, 1).to(host)
+            score = self.model(evaluate_imgs)
+            loss = self.loss_fn(score, target_labels, self.targeted)
 
-    q, _ = torch.qr(grads)
-    noise = sigma_sqrt * torch.sqrt(torch.tensor(1-alpha / d * 0.1)) * noise_full \
-        + sigma_sqrt * torch.sqrt(torch.tensor((alpha) /
-                                  pre_k_grad * 1.0)) * torch.matmul(q, nosie_subspace)
-    return noise.squeeze(-1)
+            loss = loss.reshape(-1, 1, 1, 1).repeat(evaluate_img.shape)
+            grad = loss * noise / self.sigma / 2
 
+            total_grads.append(torch.mean(grad, dim=0, keepdim=True))
+            total_loss.append(torch.mean(loss))
+            # torch.cuda.empty_cache()
 
-def get_grad_estimation(
-    model: nn.Module,
-    evaluate_img: torch.Tensor,
-    target_labels: torch.Tensor,
-    sample_per_draw: int,
-    batch_size: int,
-    sigma: float,
-    targeted: bool,
-    host,
-    norm_theshold: float,
-    grads,
-    pre_grad_list,
-    pre_k_grad,
-    alpha
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    Compute gradient estimation on evaluate_img using NES.
+        total_grads = torch.mean(torch.concat(
+            total_grads), dim=0, keepdim=True)
+        if torch.norm(total_grads, p=2) > self.norm_theshold:
+            total_grads = total_grads / \
+                torch.norm(total_grads, p=2)*self.norm_theshold
+        total_loss = torch.mean(torch.tensor(
+            total_loss, device=self.host), dim=0)
+        return total_grads, total_loss
 
-    Args:
-        model (nn.Module): PyTorch model to compute gradients for.
-        evaluate_img (torch.Tensor): Input image to compute gradients for.
-        target_labels (torch.Tensor): Target labels for computing loss.
-        sample_per_draw (int): Number of samples to draw for each batch.
-        batch_size (int): Batch size.
-        sigma (float): Standard deviation of the noise distribution.
-        targeted (bool): Whether to perform targeted attack or not.
-        host: Device to perform computation on.
-        norm_theshold (float): Threshold for gradient norm.
-        grads: Previous gradients.
-        pre_grad_list: List of previous gradients.
-        pre_k_grad: Number of previous gradients to use.
-        alpha: Learning rate.
+    def sample(self, grads, d):
+        noise_full = torch.rand(self.batch_size//2, d, 1).to(self.host)
+        nosie_subspace = torch.rand(
+            self.batch_size//2, self.pre_k_grad, 1).to(self.host)
 
-    Returns:
-        Tuple[torch.Tensor, torch.Tensor]: Tuple containing the computed gradients and loss.
-    """
-    total_batch_num = sample_per_draw // batch_size
-    total_grads = []
-    total_loss = []
-    for _ in range(total_batch_num):
-        noise = torch.normal(mean=0.0, std=1.0, size=(
-            batch_size // 2,) + evaluate_img.shape[1:], device=host)
+        q, _ = torch.qr(grads)
+        noise = self.sigma_sqrt * torch.sqrt(torch.tensor(1-self.alpha / d * 0.1)) * noise_full \
+            + self.sigma_sqrt * torch.sqrt(torch.tensor((self.alpha) /
+                                                        self.pre_k_grad * 1.0)) * torch.matmul(q, nosie_subspace)
+        return noise.squeeze(-1)
+    
 
-        if grads is not None:
-            pre_grad_list.append(grads.flatten())
-            if len(pre_grad_list) == pre_k_grad:
-                pre_grad = torch.stack(pre_grad_list, dim=0).to(host)
-                noise = sample(pre_grad.transpose(0, 1), evaluate_img.flatten(
-                    ).shape[0], host, batch_size, pre_k_grad=pre_k_grad, alpha=alpha)
-                noise = noise.view((noise.size(0),) + evaluate_img[0].size())
-                pre_grad_list.pop(0)
-
-        # generate + delta and - delta for evaluation
-        noise = torch.concat([noise, -noise], dim=0)
-
-        evaluate_imgs = evaluate_img + noise * sigma
-
-        score = model(evaluate_imgs)
-        loss = loss_fn(score, target_labels, targeted)
-
-        loss = loss.reshape(-1, 1, 1, 1).repeat(evaluate_img.shape)
-        grad = loss * noise / sigma / 2
-
-        total_grads.append(torch.mean(grad, dim=0, keepdim=True))
-        total_loss.append(torch.mean(loss))
-        # torch.cuda.empty_cache()
-
-    total_grads = torch.mean(torch.concat(total_grads), dim=0, keepdim=True)
-    if torch.norm(total_grads, p=2) > norm_theshold:
-        total_grads = total_grads/torch.norm(total_grads, p=2)*norm_theshold
-    total_loss = torch.mean(torch.tensor(total_loss, device=host), dim=0)
-    return total_grads, total_loss,
+    def compute_true_loss(self, evaluate_img: torch.Tensor, target_labels: torch.Tensor)->torch.Tensor:
+        score = self.model(evaluate_img)
+        loss = self.loss_func(score, target_labels, self.targeted)
+        return torch.squeeze(loss, 0)
