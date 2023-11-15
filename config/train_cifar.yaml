@@ -3,12 +3,12 @@ defaults:
   - setup: default
 
 
-epoch: 100
+epoch: 10
 warmup_epoch: 5
 use_amp: True
 report_every: 5
 T_max: 64
-lr: 0.1
+lr: 0.01
 
 gpu_idx: 0
 project: DNN attack-Train resnet

@@ -13,3 +13,4 @@ outputs/
 multirun/
 graph/
 nohup*
+test*

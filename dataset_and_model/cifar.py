@@ -91,8 +91,8 @@ class CIFARModelTorch(nn.Module):
 
 def get_dataset_and_model(data_path: str, num_pics:int,  model_path: str, model_type) -> Tuple[np.ndarray, np.ndarray, torch.nn.Module]:
     cifar_dataset = CIFAR(data_path=data_path, num_pic=num_pics)
-    if 'resnet' in model_type:
-        model = load_resnet_model(model_type)
+    if 'resnet' == model_type:
+        pass
     else:
         model = CIFARModelTorch()
         model.load_state_dict(torch.load(model_path))
@@ -105,14 +105,3 @@ def get_dataset_and_model(data_path: str, num_pics:int,  model_path: str, model_
     # index_select_list = np.random.choice(range(10000),num_pics,replace=False)
     # images, labels = images[index_select_list], labels[index_select_list]
     return images, np.argmax(labels, axis=-1), model
-
-model_dict={
-    'resnet34': models.resnet34,
-    'resnet18': models.resnet18,
-}
-def load_resnet_model(model_name):
-    model = model_dict[model_name]
-    model = models.resnet34(pretrained=True)
-    model.fc = nn.Linear(model.fc.in_features, 10)
-    model.eval()
-    return model
