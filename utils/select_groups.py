@@ -19,7 +19,7 @@ def select_optimal_group(fh: torch.Tensor, masks: torch.Tensor, d):
 
     return optimal_group
 
-def greedy_project(h: torch.Tensor, delta: torch.Tensor, masks: torch.Tensor, groups_num: int, d) -> torch.Tensor:
+def greedy_project(h: torch.Tensor, delta: torch.Tensor, masks: torch.Tensor, groups_num: int) -> torch.Tensor:
     """ Select k groups using greedy projection, i.e. select the first k groups with the lowest h value
 
     Args:
@@ -35,6 +35,7 @@ def greedy_project(h: torch.Tensor, delta: torch.Tensor, masks: torch.Tensor, gr
     flatten_h = torch.flatten(h) # [3072]
     flatten_u = torch.flatten(u) # [3072]
     flatten_v = torch.zeros_like(flatten_u)
+    d = masks.shape[1]
 
     for i in range(groups_num):
         onehot_optimal_group = select_optimal_group(flatten_h, masks, d)

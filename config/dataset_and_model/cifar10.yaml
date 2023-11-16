@@ -15,7 +15,7 @@ epsilon: 0.1
 filterSize: 2
 stride: 2
 name: cifar10
-eta: 0.5
+eta: 0.1
 grad_norm_threshold: 50
 
 max_lr: 2.27

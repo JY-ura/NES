@@ -1,5 +1,6 @@
 import numpy as np
 import os
+import torch
 from PIL import Image
 import matplotlib.pyplot as plt
 from skimage.metrics import structural_similarity as ssim
@@ -104,7 +105,7 @@ def calculate_ssim(img1, img2, dataset):
 
 def delta_initialization(delta, mask, k, d):
     h = - delta ** 2
-    unclip_delta = greedy_project(h, delta, mask, k, d)
+    unclip_delta = greedy_project(h, delta, mask, k)
     return unclip_delta
 
 lr_scheduler_dict={
@@ -120,3 +121,62 @@ def get_lr_scheduler(**kwargs):
     del kwargs['name']
     return lr_scheduler_dict[name](**kwargs)
 
+class SampleStragegyScheduler:
+    def __init__(
+            self,
+            sample_num: int,
+            plateu_length: int,
+            max_sample_num: int,
+            k: int,
+            k_increase: float,
+            k_max: int,
+    ) -> None:
+        self.sample_num = sample_num
+        self.plateu_length = plateu_length
+        self.max_sample_num = max_sample_num
+        self.last_loss_list = []
+        self.k_increase = k_increase
+        self.k_max = k_max
+        self.k = k
+
+    def update_sample_strategy(self, loss: torch.Tensor) -> None:
+        self.last_loss_list.append(loss)
+        self.last_loss_list = self.last_loss_list[-self.plateu_length:]
+        if self.last_loss_list[-1] >= self.last_loss_list[0] and len(self.last_loss_list) == self.plateu_length:
+            self.sample_num += 8
+            self.sample_num = min(
+                self.sample_num, self.max_sample_num)
+            self.k_increase *= 0.8
+            self.k += round(self.k_increase)
+            self.k = min(self.k, self.k_max)
+            self.last_loss_list = []
+
+        return self.sample_num, self.k
+
+
+class LossLRScheduler:
+    def __init__(
+            self,
+            max_lr: float,
+            min_lr: float,
+            plateu_length: int
+    ) -> None:
+        self.max_lr = max_lr
+        self.min_lr = min_lr
+        self.plateu_length = plateu_length
+        self.last_loss_list = []
+
+    def get_next_lr(self, loss):
+        self.last_loss_list.append(loss)
+        self.last_loss_list = self.last_loss_list[-self.plateu_length:]
+        if self.last_loss_list[-1] >= self.last_loss_list[0] and len(self.last_loss_list) == self.plateu_length:
+            if self.max_lr > self.min_lr:
+                self.max_lr = max(
+                    self.max_lr * 0.9, self.min_lr)
+            self.last_loss_list = []
+        return self.max_lr
+
+
+def get_clwars_lr(delta, grads, max_lr, eta):
+    lr = max_lr * eta * torch.norm(delta, p=2) / (torch.norm(grads, p=2) + 1e-6)
+    return lr

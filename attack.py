@@ -120,21 +120,22 @@ def esal(
     last_delta = 0
 
     # algorithm
-    alg = cfg.setup.algorithm
-    sigma = alg.sigma  # refers to sigma in the paper
-    sample_num = alg.samples_per_draw
-    max_sample_num_per_forward = alg.batch_delta_size  # max batch size to evaluate the output
-    plateu_length = alg.plateu_length
-    grouping_strategy = alg.grouping_strategy
-    if_overlap = alg.if_overlap
-    epsilon = alg.epsilon  # correspond to epsilon in the paper
-    perturb_pixels_ratio = alg.perturb_rate
-    k_init = alg.k
+    algorithm = cfg.setup.algorithm
+    sigma = algorithm.sigma  # refers to sigma in the paper
+    sample_num = algorithm.samples_per_draw
+    # max batch size to evaluate the output
+    max_sample_num_per_forward = algorithm.batch_delta_size
+    plateu_length = algorithm.plateu_length
+    grouping_strategy = algorithm.grouping_strategy
+    if_overlap = algorithm.if_overlap
+    epsilon = algorithm.epsilon  # correspond to epsilon in the paper
+    perturb_pixels_ratio = algorithm.perturb_rate
+    k_init = algorithm.k
 
     # optimizer
-    opti = cfg.scheduler
-    max_learning_rate = opti.max_lr
-    min_learning_rate = opti.min_lr
+    scheduler = cfg.scheduler
+    max_learning_rate = scheduler.max_lr
+    min_learning_rate = scheduler.min_lr
 
     momentum = cfg.setup.optimizer.momentum
 
@@ -148,39 +149,23 @@ def esal(
     image_size = torch.tensor(d_m.image_size)  # image size
     num_classes = d_m.num_labels
 
-    d = channels*image_size*image_size
+    dims = channels*image_size*image_size
+    shape = (channels, image_size, image_size)
 
     if dataset == 'imagenet':
-        max_per_draw = 80
+        max_sample_num = 100
         if model_name == 'inceptionv3':
             image_size = torch.tensor(299)
         elif model_name == 'VIT':
             image_size = torch.tensor(224)
     else:
-        max_per_draw = 50
-    max_group_num = round(1.0*d.item()/filtersize.item() /
+        max_sample_num = 64
+    max_group_num = round(1.0*dims.item()/filtersize.item() /
                           filtersize.item()/channels*perturb_pixels_ratio)
 
     device = torch.device(
         f"cuda:{cfg.gpu_idx}" if torch.cuda.is_available() else 'cpu')
     model = model.to(device)
-    # parallel_device_num = cfg.parallel_device_num
-    # device_num = torch.cuda.device_count()
-    # parallel_device_num = min(device_num, parallel_device_num)
-    # device_ids = list(np.arange(parallel_device_num))
-
-    # if parallel_device_num > 1:
-    #     print('using data parallel on', device_ids)
-    #     model = DataParallel(model, device_ids)
-    #     model = model.to(device_ids[0])
-    # else:
-    #     model = model.to(device_ids[0])
-    #     print('using single gpu')
-
-    # test model acc, get correct index and attack correct images
-    # print(f'image shape: {images.shape}')
-    # print(f'label shape: {labels.shape}')
-
     images = torch.tensor(images).float().to(device)
     labels = torch.tensor(labels).to(device)
 
@@ -195,8 +180,6 @@ def esal(
         print(
             f"It performs untargeted attack on {dataset} dataset, {model_name} model!")
         target_class = labels
-
-    host = torch.device(device)
 
     # validation on model
     with torch.no_grad():
@@ -222,10 +205,7 @@ def esal(
     def attack(
             target_image: torch.Tensor,
             target_label: torch.Tensor,
-            sample_num: int,
-            max_sample_num_per_forward: int,
             masks: torch.Tensor,
-            max_learning_rate: float,
             cfg: DictConfig,
             last_delta: torch.Tensor):
         """perform easl attack on target img 
@@ -233,8 +213,6 @@ def esal(
         Args:
             target_image (torch.Tensor): target attack img
             target_label (torch.Tensor): label for target attack
-            sample_num (int): times of estimating gradient in each attacking
-            max_sample_num_per_forward (int):  The parallel dimensions of a picture
             masks (torch.Tensor): the mask for grouping
             max_learning_rate (float): max learning rate
             cfg (DictConfig): setup for algorithm
@@ -246,7 +224,7 @@ def esal(
             gradient_transformer = Momentum(
                 variabels=target_image, momentum=momentum)
             admm_transformer = Adam(target_image)
-            scheduler = get_lr_scheduler(**cfg.scheduler)
+            lr_scheduler = get_lr_scheduler(**cfg.scheduler)
             alpha_scheduler = cos_scheduler_increase(cfg.alpha, 0.01, 1000, 0)
             num_queries = 0
             flag = False
@@ -256,14 +234,11 @@ def esal(
                 epsilon).to(device), 0.5 - target_image)
             # target_labels = F.one_hot(target_label, num_classes=num_labels).repeat(batch_size,
             #                                                                        1)  # create one-hot target labels as (batch_size, num_class)
-            last_loss_list = []
-            k = k_init
-            k_increase = k_init
-            remain_query = cfg.max_query
-            shape = (channels, image_size, image_size)
-            delta, adv_image = init_delta_fun(cfg.initial_delta, shape, device,
-                                              lower_bond, uppder_bond, epsilon, masks, k, d, last_delta, target_image)
 
+            remain_query = cfg.max_query
+            delta, adv_image = init_delta_fun(cfg.initial_delta, shape, device,
+                                              lower_bond, uppder_bond, epsilon, masks, sample_stragety.k, dims, last_delta, target_image)
+            lr=cfg.scheduler.max_lr
             # # for iter in range(cfg.max_iters):
             for iter in range(cfg.max_query):
 
@@ -272,89 +247,65 @@ def esal(
                 num_queries += 1
                 if is_sucessful(target_label, pred):
                     flag = True
-                    print(f'[succ] Iter: {iter}, groups: {k}, query: {num_queries}, prediction: {pred}, target_label:{target_label}')
+                    print(
+                        f'[succ] Iter: {iter}, groups: {sample_stragety.k}, query: {num_queries}, prediction: {pred}, target_label:{target_label}')
                     break
 
-                target_labels = F.one_hot(target_label, num_classes=num_classes).repeat(max_sample_num_per_forward,
-                                                                                       1)  # create one-hot target labels as (batch_size, num_class)
+                # create one-hot target labels as (batch_size, num_class)
+                target_labels = F.one_hot(target_label,
+                                          num_classes=num_classes).repeat(grad_estimator.max_sample_num_per_forward, 1)
 
                 grads, loss = grad_estimator.zo_estimation(
                     evaluate_img=adv_image,
                     target_labels=target_labels,
                     subspace_estimation=cfg.using_subspace,
                 )
+                grads = admm_transformer.apply_gradient(grad=grads)
+                sample_num, k = sample_stragety.update_sample_strategy(loss)
 
-                last_loss_list.append(loss)
-                last_loss_list = last_loss_list[-plateu_length:]
-                if last_loss_list[-1] >= last_loss_list[0] and len(last_loss_list) == plateu_length:
-                    sample_num += max_sample_num_per_forward
-                    sample_num = min(sample_num, max_per_draw)
-                    max_sample_num_per_forward = sample_num
-
-                    k_increase *= 0.8
-                    k += round(k_increase)
-                    k = min(k, max_group_num)
-
-                    if max_learning_rate > min_learning_rate:
-                        max_learning_rate = max(
-                            max_learning_rate * 0.9, min_learning_rate)
-                    last_loss_list = []
-
-
-                if opti.name == 'clwars':
-                    lr = opti.max_lr * d_m.eta * torch.norm(adv_image, p=2) / \
-                        (torch.norm(grads, p=2) + 1e-6)
-                elif opti.name == 'losslr':
-                    lr = max_learning_rate
+                if scheduler.name == 'clwars':
+                    lr = get_clwars_lr(
+                        delta=delta, grads=grads, max_lr=lr, eta=cfg.dataset_and_model.eta)
+                elif scheduler.name == 'losslr':
+                    lr = loss_lr_schedulr.get_next_lr(loss)
                 else:
-                    lr = next(scheduler)
+                    lr = next(lr_scheduler)
+                
+                lr *= 2 if loss > 1 else 0.1
 
+                
                 delta = delta - lr * grads
-                # clip the delta to satisfy l_inf norm
-                pro_delta = torch.clip(delta, lower_bond, uppder_bond)
 
-                h = pro_delta ** 2 - 2 * pro_delta * \
-                    delta  # shape: [1, image.shape]
+                # get sparse k groups delta
+                delta = get_k_gorups_delta(
+                    delta=delta,
+                    masks=masks,
+                    lower_bound=lower_bond,
+                    uppder_bound=uppder_bond,
+                    k=k
+                )
 
-                unclip_delta = greedy_project(h, delta, masks.clone(), k, d)
-                unclip_delta = unclip_delta.resize(
-                    channels, image_size, image_size)
-
-                # ################
-                # # all pixels
-                # # h = delta
-                # pro_delta = pro_delta.flatten()
-                # flatten_h = h.flatten()
-                # min_k_idx = torch.topk(flatten_h, dim=0, k=d, largest=True).indices
-                # delta_k = torch.zeros_like(pro_delta)
-                # delta_k[min_k_idx] = pro_delta[min_k_idx]
-                # delta = delta_k.reshape_as(target_img)
-                # ################
-
-                # clip the delta to satisfy l_inf norm
-                delta = torch.clip(unclip_delta, lower_bond, uppder_bond)
                 adv_image = torch.clip(target_image + delta, -0.5, 0.5)
 
-                num_queries += sample_num
-
-                remain_query -= sample_num+1
-                if remain_query <= sample_num-1 and remain_query > 1:
-                    sample_num = remain_query if remain_query % 2==0 else remain_query-1
-                    max_sample_num_per_forward = sample_num
+                num_queries += sample_stragety.sample_num
+                remain_query -= sample_stragety.sample_num+1
+                if remain_query <= sample_stragety.sample_num-1 and remain_query > 1:
+                    sample_stragety.sample_num = remain_query if remain_query % 2 == 0 else remain_query-1
+                    sample_stragety.max_sample_num_per_forward = sample_stragety.sample_num
                 elif remain_query <= 0:
                     break
-                grads = admm_transformer.apply_gradient(grad=grads)
-                grad_estimator.previous_grads = grads.detach().clone()
+                grad_estimator.max_sample_num_per_forward = sample_num
                 grad_estimator.sample_num = sample_num
-                grad_estimator.max_sample_num_per_forward = max_sample_num_per_forward
-                # grad_estimator.alpha = next(alpha_scheduler)
+                grad_estimator.previous_grads = grads.detach().clone()
+                grad_estimator.sample_num = sample_stragety.sample_num
+                grad_estimator.max_sample_num_per_forward = sample_stragety.sample_num
+                grad_estimator.previous_grad_queue.append(grads.flatten())
+                grad_estimator.alpha = next(alpha_scheduler)
 
                 if iter % cfg.log_iters == 0:
                     print(
-                        f'attack iter {iter}, loss: {loss.cpu():.5f}, group: {k}, spd: {sample_num}, lr:{lr:.3f}')
-            else:
-                print("Fail Attack!")
-                pass
+                        f'attack iter {iter}, loss: {loss.cpu():.5f}, group: {k}, spd: {sample_stragety.sample_num}, lr:{lr:.3f}')
+
             l0_norm = torch.sum((delta != 0).float())
             l2_norm = torch.norm(delta)
             linf_norm = torch.max(torch.abs(delta))
@@ -365,6 +316,30 @@ def esal(
 
     def is_sucessful(target_label, pred):
         return (targeted == 'untargeted' and pred != target_label) or (targeted == 'targeted' and pred == target_label)
+
+    def get_k_gorups_delta(delta, masks, lower_bound, uppder_bound, k):
+        # clip the delta to satisfy l_inf norm
+        pro_delta = torch.clip(delta, lower_bound, uppder_bound)
+
+        h = pro_delta ** 2 - 2 * pro_delta * delta  # shape: [1, image.shape]
+
+        unclip_delta = greedy_project(h, delta, masks.clone(), k)
+        unclip_delta = unclip_delta.resize(*shape)
+
+        # ################
+        # # all pixels
+        # # h = delta
+        # pro_delta = pro_delta.flatten()
+        # flatten_h = h.flatten()
+        # min_k_idx = torch.topk(flatten_h, dim=0, k=dims, largest=True).indices
+        # delta_k = torch.zeros_like(pro_delta)
+        # delta_k[min_k_idx] = pro_delta[min_k_idx]
+        # delta = delta_k.reshape_as(target_img)
+        # ################
+
+        # clip the delta to satisfy l_inf norm
+        delta = torch.clip(unclip_delta, lower_bound, uppder_bound)
+        return delta
 
     num_queries_list = []
     l0_norm_list = []
@@ -389,7 +364,7 @@ def esal(
             # index = torch.load(f"/home/yym/Documents/YYM/2/our/NES/Group/index_{dataset}_standard_{if_overlap}.pth")
         else:
             masks = standard_grouping(
-                image_size, filtersize, stride, channels, d)
+                image_size, filtersize, stride, channels, dims)
             if model_name == 'VT':
                 torch.save(
                     masks, f"Group/{model_name}/onehot_index_{dataset}_standard_{if_overlap}.pth")
@@ -412,7 +387,7 @@ def esal(
     for image, orig_label, target_label in zip(images, labels, target_class):
         print("No. ", i+1)
         i += 1
-        
+
         # # initialize the zeoestimator
         grad_estimator = ZOEstimator(
             model=model,
@@ -425,18 +400,28 @@ def esal(
             subspace_dim=cfg.subspace_dim,
             device=device
         )
+        sample_stragety = SampleStragegyScheduler(
+            sample_num=sample_num,
+            plateu_length=plateu_length,
+            max_sample_num=max_sample_num,
+            k=k_init,
+            k_increase=k_init,
+            k_max=max_group_num,
+        )
+        loss_lr_schedulr = LossLRScheduler(
+            max_lr=max_learning_rate,
+            min_lr=min_learning_rate,
+            plateu_length=plateu_length
+        )
 
         adv_image, flag, num_queries, l0_norm, l2_norm, linf_norm, target_label, delta = attack(
             target_image=image.to(device),
             target_label=target_label.to(device),
-            sample_num=sample_num,
-            max_sample_num_per_forward=max_sample_num_per_forward,
             masks=masks.to(device),
-            max_learning_rate=max_learning_rate,
             cfg=cfg,
             last_delta=last_delta
         )
-        
+
         orig_img = img_transform(image.cpu().numpy())
         adv_img = img_transform(adv_image[0].cpu().numpy())
         if flag:
@@ -469,3 +454,5 @@ def esal(
     ]}
 
     return result
+
+

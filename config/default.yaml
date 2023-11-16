@@ -14,7 +14,7 @@ max_query: 20000
 targeted: untargeted
 subspace_dim: 2
 alpha: 0.5
-using_subspace: False
+using_subspace: True
 
 initial_delta: random
 
