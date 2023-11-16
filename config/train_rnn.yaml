@@ -1,0 +1,21 @@
+defaults:
+  - dataset_and_model: cifar10
+  - setup: default
+
+
+epoch: 100
+warmup_epoch: 5
+use_amp: True
+train_update_steps: 16
+test_update_steps: 16
+tbptt_steps: 4
+checkpoint_interval: 20
+lr: 0.01
+sample_num: 32
+max_sample_num_per_forward: 32
+targeted: untargeted
+max_batch_forward: 32
+
+gpu_idx: 1
+project: DNN attack-Train l2l
+entity: yura1213

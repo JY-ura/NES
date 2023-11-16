@@ -4,7 +4,7 @@ from typing import Callable, Tuple
 from .estimator import MetaZOEstimator
 from torch.utils.data import DataLoader
 from pathlib import Path
-
+from torch.nn import functional as F
 
 class MetaTrainer:
     """
@@ -30,6 +30,8 @@ class MetaTrainer:
         zo_estimator: MetaZOEstimator,
         device: torch.device,
         targeted: str,
+        max_sample_num_per_forward: int=128,
+        num_classes: int =10,
     ) -> None:
         """
         Initializes the Trainer class.
@@ -48,16 +50,19 @@ class MetaTrainer:
         self.attack_loss = attack_loss
         self.zo_estimator = zo_estimator
         self.device = device
+        self.targeted = targeted
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-3)
+        self.max_sample_num_per_forward = max_sample_num_per_forward
+        self.num_classes = num_classes
 
     def train(
         self,
         train_loader: DataLoader,
         test_loader: DataLoader,
         epoch_num: int,
-        train_update_steps: DataLoader,
+        train_update_steps: int,
         tbptt_steps: int,
-        test_update_steps: DataLoader,
+        test_update_steps: int,
         skip_query_rnn: bool,
         skip_update_rnn: bool,
         lr: float,
@@ -132,6 +137,7 @@ class MetaTrainer:
         evaluate_img, target = evaluate_img.to(
             self.device), target.to(self.device)
 
+        target =  F.one_hot(target, num_classes=self.num_classes)
         adversial_img = evaluate_img.clone().detach().requires_grad_(True)
         output = self.model(evaluate_img)
         initial_loss = self.attack_loss(output, target, self.targeted)
@@ -151,8 +157,9 @@ class MetaTrainer:
                     lr=lr
                 )
                 previous_loss = previous_loss.detach()
+                delta = delta.reshape_as(adversial_img)
                 adversial_img += delta
-                adversial_img = torch.clip(adversial_img, 0, 1)
+                adversial_img = torch.clip(adversial_img, -0.5, 0.5)
                 output = self.model(adversial_img)
                 loss = self.attack_loss(output, target, self.targeted)
 
@@ -189,6 +196,7 @@ class MetaTrainer:
             evaluate_img, target = evaluate_img.to(
                 self.device), target.to(self.device)
             output = self.model(evaluate_img)
+            target =  F.one_hot(target, num_classes=self.num_classes)
             init_loss = self.attack_loss(output, target, self.targeted).item()
             adversial_img = evaluate_img.clone().detach().requires_grad_(True)
             self.zo_estimator.reset_state(keep_states=False)
@@ -204,8 +212,9 @@ class MetaTrainer:
                     lr=lr
                 )
                 test_loss = test_loss.detach()
+                delta = delta.reshape_as(adversial_img)
                 adversial_img += delta
-                adversial_img = torch.clip(adversial_img, 0, 1)
+                adversial_img = torch.clip(adversial_img, -0.5, 0.5)
 
             # use last loss as the final loss
             loss_sum += test_loss.item()

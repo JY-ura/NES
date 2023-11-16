@@ -5,7 +5,7 @@ dataset_and_model:
   model_path: None
   model_type: inceptionv3   #VIT
 
-num_labels: 1000
+num_classes: 1000
 image_size: 299
 num_channels: 3
 k: 10 #

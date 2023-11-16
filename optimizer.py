@@ -9,9 +9,12 @@ __all__ = ['cos_scheduler', 'Momentum']
 default_device = torch.device(0)
 
 
-def cross_entorpy_loss(score, target_labels,):
+def cross_entorpy_loss(score, target_labels, targeted: str=False):
     target_labels = torch.argmax(target_labels, axis=-1)
-    return F.cross_entropy(score, target_labels, reduce=False) # compute cross entorpy loss w.r.t. each sample
+    if targeted == 'untargeted':
+        return -F.cross_entropy(score, target_labels, reduce=False)
+    else:
+        return F.cross_entropy(score, target_labels, reduce=False) # compute cross entorpy loss w.r.t. each sample
 
 def margin_loss(score: torch.Tensor, target_labels: torch.Tensor, targeted: str):
     """compute margin loss, i.e. score[not target]_max - score[target], if <0, then we set it to 0 and say the attack is complete

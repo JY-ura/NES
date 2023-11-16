@@ -47,7 +47,6 @@ class MetaZOEstimator(nn.Module):
         input_dim: int = 1,
         hidden_size: int = 10,
         normalize: bool = True,
-        checkpoint_path: Optional[str] = None,
         reg_lambda: float = 0.1
     ) -> None:
         """
@@ -114,12 +113,10 @@ class MetaZOEstimator(nn.Module):
 
         # init state of the update rnn
         self.previous_grad_estimation = torch.zeros(
-            size=(self.flattened_input_dim), device=self.device)
+            size=(self.flattened_input_dim,), device=self.device)
         self.previous_param_update = torch.zeros(
-            size=(self.flattened_input_dim), device=self.device)
+            size=(self.flattened_input_dim,), device=self.device)
 
-        if checkpoint_path is not None:
-            self.load(checkpoint_path, freeze_update_rnn=True)
 
     def load(self, checkpoint_path, freeze_update_rnn: bool):
         """
@@ -173,18 +170,18 @@ class MetaZOEstimator(nn.Module):
         """
         if not keep_states:
             self.previous_grad_estimation = torch.zeros(
-                size=(self.flattened_input_dim), device=self.device)
+                size=(self.flattened_input_dim,), device=self.device)
             self.previous_param_update = torch.zeros(
-                size=(self.flattened_input_dim), device=self.device)
+                size=(self.flattened_input_dim,), device=self.device)
 
             def init_lstm_state(lstm: nn.LSTM):
                 hidden_size = lstm.hidden_size
                 num_layers = lstm.num_layers
                 batch_size = self.flattened_input_dim
-                h = torch.zeros(num_layers, batch_size,
-                                hidden_size, device=self.device)
-                c = torch.zeros(num_layers, batch_size,
-                                hidden_size, device=self.device)
+                h = torch.zeros((num_layers, batch_size,
+                                hidden_size), device=self.device)
+                c = torch.zeros((num_layers, batch_size,
+                                hidden_size), device=self.device)
 
                 return h, c
             self.query_u_rnn_state = init_lstm_state(self.query_u_rnn)
@@ -213,7 +210,7 @@ class MetaZOEstimator(nn.Module):
             torch.Tensor: The estimated gradient after passing through the estimator.
         """
         grad = grad.reshape(-1, 1, 1)  # [batch_size, 1, 1]
-        modified_grad, update_rnn_state = self.update_rnn_step(
+        modified_grad, update_rnn_state = self.update_rnn(
             grad, self.update_rnn_state)
         self.update_rnn_state = update_rnn_state
         modified_grad = self.update_projector(modified_grad)
@@ -248,14 +245,14 @@ class MetaZOEstimator(nn.Module):
         def loss_fn(evaluate_imgs):
             evaluate_imgs = evaluate_imgs.reshape(-1, *evaluate_img.shape[1:])
             prediction = model(evaluate_imgs)
-            return attack_loss(prediction, target_labels, self.targeted)
+            return attack_loss(prediction, target_labels.repeat(evaluate_imgs.size(0), 1), self.targeted)
 
         self.step += 1
         # use previous grad estimation and param update to estimate the grad
-        x = torch.cat(self.previous_grad_estimation.unsqueeze(
-            1), self.previous_grad_estimation.unsqueeze(1), dim=1)
-        x.unsqueeze(1)
-        x, query_u_rnn_state = self.query_u_rnn_step(
+        x = torch.cat((self.previous_grad_estimation.unsqueeze(
+            1), self.previous_param_update.unsqueeze(1)), dim=1)
+        x = x.unsqueeze(1)
+        x, query_u_rnn_state = self.query_u_rnn(
             x, self.query_u_rnn_state)
         self.query_u_rnn_state = query_u_rnn_state
         sigma = self.query_u_rnn_projector(x)
@@ -320,10 +317,10 @@ def _symmetric_differentiation(
         Tuple[torch.Tensor, torch.Tensor]: Gradient from finite difference of the loss function and the loss.
     """
     perturbation = torch.cat([perturbation, -perturbation], dim=0)
-    losses = loss_fn(input + perturbation)
+    losses = loss_fn(input.flatten() + perturbation)
     # losses [2 * sample_num]
     # compute hardmard product of losses and perturbation
-    losses = losses.view(-1, 1, 1, 1).repeat((1, ) + input.shape)
+    losses = losses.view(-1, 1,)
     grad = torch.mean(losses * perturbation, dim=0)
     loss = torch.mean(losses)
     return grad, loss
