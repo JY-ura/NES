@@ -2,6 +2,7 @@ import torch
 from typing import Tuple
 import torch.nn as nn
 from optimizer import margin_loss
+from typing import Optional
 
 
 class ZOEstimator(nn.Module):
@@ -17,6 +18,20 @@ class ZOEstimator(nn.Module):
         subspace_dim: int,
         device: torch.device
     ) -> None:
+        """
+        Zeroth Order Estimator for Black-box Adversarial Attacks.
+
+        Args:
+            model (nn.Module): PyTorch model to be attacked.
+            sample_num (int): Number of samples to estimate the gradient.
+            max_sample_num_per_forward (int): Maximum number of samples to be evaluated in one forward pass.
+            sigma (float): Standard deviation of the Gaussian noise added to the input.
+            targeted (str): Whether the attack is targeted or untargeted.
+            grad_clip_threshold (float): Threshold for gradient clipping.
+            alpha (float): Weight for the subspace sampling.
+            subspace_dim (int): Dimension of the subspace.
+            device (torch.device): Device to run the attack on.
+        """
         assert targeted in ['targeted', 'untargeted']
 
         self.model = model
@@ -41,12 +56,23 @@ class ZOEstimator(nn.Module):
         target_labels: torch.Tensor,
         subspace_estimation: bool = False
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Estimate the gradient of the loss function using zeroth order optimization.
 
-        num_forwards = self.sample_num // self.max_sample_num_per_forward
+        Args:
+            evaluate_img (torch.Tensor): Input image to be attacked.
+            target_labels (torch.Tensor): Target labels for targeted attack, or ground truth labels for untargeted attack.
+            subspace_estimation (bool, optional): Whether to use subspace estimation. Defaults to False.
+
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor]: Estimated gradient and loss.
+        """
+        # exceed the max sample will cause OOM
+        grad_accumulation_steps = self.sample_num // self.max_sample_num_per_forward
         total_grads = []
         total_loss = []
 
-        for _ in range(num_forwards):
+        for _ in range(grad_accumulation_steps):
             # determine wether to use subspace to sample perturbation
             if not subspace_estimation or self.previous_grads is None:
                 perturbation = torch.normal(
@@ -58,6 +84,7 @@ class ZOEstimator(nn.Module):
                 )
 
             else:
+                assert self.subspace_dim is not None, 'subspace_dim must be specified when using subspace estimation'
                 self.previous_grad_queue.append(self.previous_grads.flatten())
                 if len(self.previous_grad_queue) == self.subspace_dim:
                     previous_grads = torch.stack(
@@ -72,9 +99,7 @@ class ZOEstimator(nn.Module):
 
             # generate + delta and - delta for evaluation
             perturbation = torch.concat([perturbation, -perturbation], dim=0)
-
             evaluate_imgs = evaluate_img + perturbation * self.sigma
-
             prediction = self.model(evaluate_imgs)
             loss = self.loss_fn(prediction, target_labels, self.targeted)
 
@@ -115,12 +140,22 @@ class ZOEstimator(nn.Module):
         q, _ = torch.qr(grads)
         perturbation = self.sigma * torch.sqrt(torch.tensor((1-self.alpha) / d * 1.0)) * perturbation_full_space \
             + self.sigma * torch.sqrt(torch.tensor(self.alpha /
-                                                        self.subspace_dim * 1.0)) * torch.matmul(q, perturbation_subspace)
+                                                   self.subspace_dim * 1.0)) * torch.matmul(q, perturbation_subspace)
         # q: [n, subspace_dim]
         # perturbation_subspace: [max_sample_num, subspace_dim, 1]
         return perturbation.squeeze(-1)
 
     def compute_true_loss(self, evaluate_img: torch.Tensor, target_labels: torch.Tensor) -> torch.Tensor:
+        """
+        Compute the true loss of the input image.
+
+        Args:
+            evaluate_img (torch.Tensor): Input image to be evaluated.
+            target_labels (torch.Tensor): Target labels for targeted attack, or ground truth labels for untargeted attack.
+
+        Returns:
+            torch.Tensor: True loss of the input image.
+        """
         score = self.model(evaluate_img)
         loss = self.loss_func(score, target_labels, self.targeted)
         return torch.squeeze(loss, 0)
