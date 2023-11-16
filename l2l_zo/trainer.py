@@ -138,7 +138,7 @@ class MetaTrainer:
             self.device), target.to(self.device)
 
         target =  F.one_hot(target, num_classes=self.num_classes)
-        adversial_img = evaluate_img.clone().detach().requires_grad_(True)
+        adversial_img = evaluate_img.clone().detach().requires_grad_(False)
         output = self.model(evaluate_img)
         initial_loss = self.attack_loss(output, target, self.targeted)
 
@@ -198,7 +198,7 @@ class MetaTrainer:
             output = self.model(evaluate_img)
             target =  F.one_hot(target, num_classes=self.num_classes)
             init_loss = self.attack_loss(output, target, self.targeted).item()
-            adversial_img = evaluate_img.clone().detach().requires_grad_(True)
+            adversial_img = evaluate_img.clone().detach().requires_grad_(False)
             self.zo_estimator.reset_state(keep_states=False)
 
             for k in range(update_steps):
