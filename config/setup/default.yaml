@@ -1,5 +1,5 @@
 algorithm:
-  sigma: 0.001 # refers to sigma in the paper 
+  sigma: 0.01 # refers to sigma in the paper 
   samples_per_draw: ${dataset_and_model.spd} # refers to n in the papaer
   k: ${dataset_and_model.k} # top k indices, used in the paper, also refer to s in the paper
   batch_delta_size: ${dataset_and_model.batch_delta_size}
