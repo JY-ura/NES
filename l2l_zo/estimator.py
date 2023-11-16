@@ -189,12 +189,12 @@ class MetaZOEstimator(nn.Module):
 
         else:
             self.query_u_rnn_state = (
-                self.query_u_rnn_state[0].detach(),
-                self.query_u_rnn_state[1].detach()
+                self.query_u_rnn_state[0].detach().clone(),
+                self.query_u_rnn_state[1].detach().clone()
             )
             self.update_rnn_state = (
-                self.update_rnn_state[0].detach(),
-                self.update_rnn_state[1].detach()
+                self.update_rnn_state[0].detach().clone(),
+                self.update_rnn_state[1].detach().clone()
             )
 
         self.step = 0
@@ -262,7 +262,7 @@ class MetaZOEstimator(nn.Module):
         self.mean = torch.zeros_like(self.std)
         regularize_loss = self.reg_lambda * (
             torch.sum(self.std ** 2) + torch.sum(self.mean ** 2))
-        self.std += 1.0
+        self.std = self.std + 1.0
 
         if self.normalize:
             self.std = self.std / self.std.norm() * torch.ones_like(self.std).norm()

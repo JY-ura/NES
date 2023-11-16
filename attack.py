@@ -147,7 +147,7 @@ def esal(
     filtersize = torch.tensor(d_m.filterSize)
     stride = d_m.stride
     image_size = torch.tensor(d_m.image_size)  # image size
-    num_classes = d_m.num_labels
+    num_classes = d_m.num_classes
 
     dims = channels*image_size*image_size
     shape = (channels, image_size, image_size)
@@ -238,7 +238,7 @@ def esal(
             remain_query = cfg.max_query
             delta, adv_image = init_delta_fun(cfg.initial_delta, shape, device,
                                               lower_bond, uppder_bond, epsilon, masks, sample_stragety.k, dims, last_delta, target_image)
-            lr=cfg.scheduler.max_lr
+            lr = cfg.scheduler.max_lr
             # # for iter in range(cfg.max_iters):
             for iter in range(cfg.max_query):
 
@@ -270,10 +270,9 @@ def esal(
                     lr = loss_lr_schedulr.get_next_lr(loss)
                 else:
                     lr = next(lr_scheduler)
-                
+
                 lr *= 2 if loss > 1 else 0.1
 
-                
                 delta = delta - lr * grads
 
                 # get sparse k groups delta
@@ -320,18 +319,16 @@ def esal(
     def get_k_gorups_delta(delta, masks, lower_bound, uppder_bound, k):
         # clip the delta to satisfy l_inf norm
         pro_delta = torch.clip(delta, lower_bound, uppder_bound)
-
         h = pro_delta ** 2 - 2 * pro_delta * delta  # shape: [1, image.shape]
-
         unclip_delta = greedy_project(h, delta, masks.clone(), k)
         unclip_delta = unclip_delta.resize(*shape)
 
-        # ################
-        # # all pixels
-        # # h = delta
-        # pro_delta = pro_delta.flatten()
-        # flatten_h = h.flatten()
-        # min_k_idx = torch.topk(flatten_h, dim=0, k=dims, largest=True).indices
+        if cfg.attack_all_pixels:
+
+
+            pro_delta = pro_delta.flatten()
+            flatten_h = h.flatten()
+        min_k_idx = torch.topk(flatten_h, dim=0, k=dims, largest=True).indices
         # delta_k = torch.zeros_like(pro_delta)
         # delta_k[min_k_idx] = pro_delta[min_k_idx]
         # delta = delta_k.reshape_as(target_img)
@@ -400,6 +397,7 @@ def esal(
             subspace_dim=cfg.subspace_dim,
             device=device
         )
+        
         sample_stragety = SampleStragegyScheduler(
             sample_num=sample_num,
             plateu_length=plateu_length,
@@ -408,6 +406,7 @@ def esal(
             k_increase=k_init,
             k_max=max_group_num,
         )
+
         loss_lr_schedulr = LossLRScheduler(
             max_lr=max_learning_rate,
             min_lr=min_learning_rate,
@@ -424,6 +423,7 @@ def esal(
 
         orig_img = img_transform(image.cpu().numpy())
         adv_img = img_transform(adv_image[0].cpu().numpy())
+        
         if flag:
             acc_count += 1
             if cfg.save_image:
@@ -454,5 +454,3 @@ def esal(
     ]}
 
     return result
-
-

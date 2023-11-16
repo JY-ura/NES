@@ -145,34 +145,35 @@ class MetaTrainer:
         for k in range(update_steps // tbptt_steps):
             self.zo_estimator.reset_state(keep_states=k > 0)
             loss_sum = 0
+            
+            with torch.autograd.set_detect_anomaly(True):
+                for j in range(tbptt_steps):
+                    delta, previous_loss, regularize_loss = self.zo_estimator.zo_estimation(
+                        model=self.model,
+                        evaluate_img=evaluate_img,
+                        target_labels=target,
+                        attack_loss=self.attack_loss,
+                        skip_query_rnn=skip_query_rnn,
+                        skip_update_rnn=skip_update_rnn,
+                        lr=lr
+                    )
+                    previous_loss = previous_loss.detach()
+                    delta = delta.reshape_as(adversial_img)
+                    adversial_img = adversial_img + delta
+                    adversial_img.clip_(-0.5, 0.5)
+                    output = self.model(adversial_img)
+                    loss = self.attack_loss(output, target, self.targeted)
 
-            for j in range(tbptt_steps):
-                delta, previous_loss, regularize_loss = self.zo_estimator.zo_estimation(
-                    model=self.model,
-                    evaluate_img=evaluate_img,
-                    target_labels=target,
-                    attack_loss=self.attack_loss,
-                    skip_query_rnn=skip_query_rnn,
-                    skip_update_rnn=skip_update_rnn,
-                    lr=lr
-                )
-                previous_loss = previous_loss.detach()
-                delta = delta.reshape_as(adversial_img)
-                adversial_img += delta
-                adversial_img = torch.clip(adversial_img, -0.5, 0.5)
-                output = self.model(adversial_img)
-                loss = self.attack_loss(output, target, self.targeted)
+                    loss_sum += (k * tbptt_steps + j) * (loss - previous_loss)
+                    loss_sum += regularize_loss
 
-                loss_sum += (k * tbptt_steps + j) * (loss - previous_loss)
-                loss_sum += regularize_loss
-
-            self.zo_estimator.zero_grad()
-            self.model.zero_grad()
-            self.optimizer.zero_grad()
-            loss_sum.backward()
-            torch.nn.utils.clip_grad.clip_grad_value_(
-                self.zo_estimator.parameters(), 1)
-            self.optimizer.step()
+                self.zo_estimator.zero_grad()
+                self.model.zero_grad()
+                self.optimizer.zero_grad()
+                loss_sum.backward()
+                torch.nn.utils.clip_grad.clip_grad_value_(
+                    self.zo_estimator.parameters(), 1)
+                self.optimizer.step()
 
         decrease_in_loss += loss.item() / initial_loss.item()
         final_loss += loss.item()

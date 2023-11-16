@@ -9,7 +9,7 @@ algorithm:
   grouping_strategy: standard # 'kmeans   standard'
   if_overlap: nonoverlapping
   epsilon: ${dataset_and_model.epsilon}
-  perturb_rate: 0.1
+  perturb_rate: 1
 
 optimizer:
   momentum: 0.9 # momentum used in gradient transfromation 
