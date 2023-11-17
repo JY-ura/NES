@@ -1,6 +1,6 @@
 dataset_and_model:
   _target_: dataset_and_model.cifar.get_dataset_and_model
-  data_path: datasets/cifar
+  data_path: ./datasets/cifar
   num_pics: 100
   model_path: model_files/cifar10_model.pth
   model_type: cifar10
