@@ -18,6 +18,7 @@ def get_model(dataset, path):
 
 def get_dataset(dataset, path):
     if dataset == 'cifar10':
+        print(path)
         from dataset_and_model.cifar import CIFAR
         cifar_dataset = CIFAR(data_path=path, num_pic=10000)
         train_img, train_lab = cifar_dataset.train_data, cifar_dataset.train_labels

@@ -6,6 +6,7 @@ from torch.utils.data import DataLoader
 from pathlib import Path
 from torch.nn import functional as F
 
+
 class MetaTrainer:
     """
     A class for training a meta-learning based zeroth-order optimization algorithm.
@@ -30,8 +31,8 @@ class MetaTrainer:
         zo_estimator: MetaZOEstimator,
         device: torch.device,
         targeted: str,
-        max_sample_num_per_forward: int=128,
-        num_classes: int =10,
+        max_sample_num_per_forward: int = 128,
+        num_classes: int = 10,
     ) -> None:
         """
         Initializes the Trainer class.
@@ -46,7 +47,7 @@ class MetaTrainer:
         assert targeted in [
             'targeted', 'untargeted'], "targeted must be either 'targeted' or 'untargeted'"
         zo_estimator = zo_estimator.to(device)
-        self.model = model
+        self.model = model.eval().to(device)
         self.attack_loss = attack_loss
         self.zo_estimator = zo_estimator
         self.device = device
@@ -114,12 +115,12 @@ class MetaTrainer:
 
             if epoch % checkpoint_interval == 0:
                 self.zo_estimator.save(
-                    checkpoint_path=checkpoint_path, best=False)
+                    epoch=epoch, checkpoint_path=checkpoint_path, best=False)
 
             if test_loss < min_test_loss:
                 min_test_loss = test_loss
                 self.zo_estimator.save(
-                    checkpoint_path=checkpoint_path, best=True)
+                    epoch=epoch, checkpoint_path=checkpoint_path, best=True)
 
     def _train_one_epoch(
         self,
@@ -132,53 +133,67 @@ class MetaTrainer:
     ):
         decrease_in_loss = 0.0
         final_loss = 0.0
-        self.model.train()
+        self.zo_estimator.train()
         evaluate_img, target = next(iter(train_loader))
         evaluate_img, target = evaluate_img.to(
             self.device), target.to(self.device)
 
-        target =  F.one_hot(target, num_classes=self.num_classes)
-        adversial_img = evaluate_img.clone().detach().requires_grad_(False)
+        target = F.one_hot(target, num_classes=self.num_classes)
+        adversial_img = evaluate_img.detach().clone().requires_grad_(True)
         output = self.model(evaluate_img)
-        initial_loss = self.attack_loss(output, target, self.targeted)
+        initial_loss = self.attack_loss(output, target, self.targeted).item()
+        print("initial loss: ", initial_loss)
 
         for k in range(update_steps // tbptt_steps):
-            self.zo_estimator.reset_state(keep_states=k > 0)
+            self._reset_state(adversial_img, k)
             loss_sum = 0
-            
-            with torch.autograd.set_detect_anomaly(True):
-                for j in range(tbptt_steps):
-                    delta, previous_loss, regularize_loss = self.zo_estimator.zo_estimation(
-                        model=self.model,
-                        evaluate_img=evaluate_img,
-                        target_labels=target,
-                        attack_loss=self.attack_loss,
-                        skip_query_rnn=skip_query_rnn,
-                        skip_update_rnn=skip_update_rnn,
-                        lr=lr
-                    )
-                    previous_loss = previous_loss.detach()
-                    delta = delta.reshape_as(adversial_img)
-                    adversial_img = adversial_img + delta
-                    adversial_img.clip_(-0.5, 0.5)
-                    output = self.model(adversial_img)
-                    loss = self.attack_loss(output, target, self.targeted)
 
-                    loss_sum += (k * tbptt_steps + j) * (loss - previous_loss)
-                    loss_sum += regularize_loss
+            for j in range(tbptt_steps):
+                delta, previous_loss, regularize_loss = self.zo_estimator.zo_estimation(
+                    model=self.model,
+                    evaluate_img=evaluate_img,
+                    target_labels=target,
+                    attack_loss=self.attack_loss,
+                    skip_query_rnn=skip_query_rnn,
+                    skip_update_rnn=skip_update_rnn,
+                    lr=lr
+                )
+                previous_loss = previous_loss.detach()
+                delta = delta.reshape_as(adversial_img)
+                adversial_img = adversial_img + delta
+                adversial_img = adversial_img.clamp(-0.5, 0.5)
+                output = self.model(adversial_img)
+                loss = self.attack_loss(output, target, self.targeted)
 
-                self.zo_estimator.zero_grad()
-                self.model.zero_grad()
-                self.optimizer.zero_grad()
-                loss_sum.backward()
-                torch.nn.utils.clip_grad.clip_grad_value_(
-                    self.zo_estimator.parameters(), 1)
-                self.optimizer.step()
+                loss_sum += (k * tbptt_steps + j) * (loss - previous_loss)
+                loss_sum += regularize_loss
 
-        decrease_in_loss += loss.item() / initial_loss.item()
+            self.zo_estimator.zero_grad()
+            self.optimizer.zero_grad()
+            loss_sum.backward()
+            torch.nn.utils.clip_grad.clip_grad_value_(
+                self.zo_estimator.parameters(), 1)
+            self.optimizer.step()
+
+        decrease_in_loss += loss.item() / initial_loss
         final_loss += loss.item()
 
         return decrease_in_loss, final_loss
+
+    def _reset_state(self, adversial_img, k):
+        """
+        Resets the state of the trainer.
+
+        Parameters:
+        - adversial_img: The adversarial image.
+        - k: The current tbptt step number
+
+        Returns:
+        None
+        """
+        self.zo_estimator.reset_state(keep_states=k > 0)
+        self.model.zero_grad()
+        adversial_img.detach_()
 
     def _test_one_epoch(
         self,
@@ -187,17 +202,20 @@ class MetaTrainer:
         skip_query_rnn: bool,
         skip_update_rnn: bool,
         lr: float,
+        num_test_samples: int = 10,
     ):
         self.zo_estimator.eval()
         loss_sum = 0
         loss_ratio = 0.0
-        num = 0
 
-        for evaluate_img, target in test_loader:
+        for i, (evaluate_img, target) in enumerate(test_loader):
+            if i >= num_test_samples:
+                break
+
             evaluate_img, target = evaluate_img.to(
                 self.device), target.to(self.device)
             output = self.model(evaluate_img)
-            target =  F.one_hot(target, num_classes=self.num_classes)
+            target = F.one_hot(target, num_classes=self.num_classes)
             init_loss = self.attack_loss(output, target, self.targeted).item()
             adversial_img = evaluate_img.clone().detach().requires_grad_(False)
             self.zo_estimator.reset_state(keep_states=False)
@@ -220,6 +238,5 @@ class MetaTrainer:
             # use last loss as the final loss
             loss_sum += test_loss.item()
             loss_ratio += test_loss.item() / init_loss
-            num += 1
 
-        return loss_sum / num, loss_ratio / num
+        return loss_sum / num_test_samples, loss_ratio / num_test_samples
