@@ -12,8 +12,10 @@ k: 10   # untarget {nonoverlap 25 overlap 13}  target{nonoverlap 30 overlap 17}
 spd: 2
 batch_delta_size: 2
 epsilon: 0.1
+
 filterSize: 2
 stride: 2
+
 name: cifar10
 eta: 0.1
 grad_norm_threshold: 50

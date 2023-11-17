@@ -6,6 +6,7 @@ defaults:
 log_iters: 10000000000
 gpu_idx: 0
 parallel_device_num: 1
+attack_all_pixels: False
 save_image: False
 save_result: False
 load_pre_groups: True
@@ -14,7 +15,7 @@ max_query: 20000
 targeted: untargeted
 subspace_dim: 2
 alpha: 0.5
-using_subspace: True
+using_subspace: False
 
 initial_delta: random
 
@@ -22,3 +23,4 @@ wandb: False
 project: lr_scheduler
 name: ${dataset_and_model.name}_${scheduler.name}
 entity: yura1213
+

@@ -95,13 +95,16 @@ def get_dataset_and_model(data_path: str, num_pics:int,  model_path: str, model_
         model = models.resnet18(pretrained=False)
         model.fc = nn.Linear(512, 10)
         model.load_state_dict(torch.load(model_path))
+        print('resnet18 model loaded')
     elif 'mobilenet_v2' == model_type:
         model = models.mobilenet_v2(pretrained=False)
         model.classifier[1] = nn.Linear(1280, 10)
         model.load_state_dict(torch.load(model_path))
+        print('mobilenet_v2 model loaded')
     else:
         model = CIFARModelTorch()
         model.load_state_dict(torch.load(model_path))
+        print('cifar model loaded')
     model.eval() # set the module into evaluation mode
 
     images, labels = cifar_dataset.test_data[:num_pics, :, :, :], cifar_dataset.test_labels[:num_pics]

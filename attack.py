@@ -160,9 +160,14 @@ def esal(
             image_size = torch.tensor(224)
     else:
         max_sample_num = 64
-    max_group_num = round(1.0*dims.item()/filtersize.item() /
-                          filtersize.item()/channels*perturb_pixels_ratio)
 
+    if algorithm.if_overlap == 'nonoverlapping':
+        max_group_num = round(1.0*dims.item()/filtersize.item() /
+                            filtersize.item()/channels*perturb_pixels_ratio)
+    else:
+        max_group_num = round(1.0*dims.item()/filtersize.item() /
+                            filtersize.item()/channels*perturb_pixels_ratio)
+    print(max_group_num)
     device = torch.device(
         f"cuda:{cfg.gpu_idx}" if torch.cuda.is_available() else 'cpu')
     model = model.to(device)
@@ -225,7 +230,7 @@ def esal(
                 variabels=target_image, momentum=momentum)
             admm_transformer = Adam(target_image)
             lr_scheduler = get_lr_scheduler(**cfg.scheduler)
-            alpha_scheduler = cos_scheduler_increase(cfg.alpha, 0.01, 1000, 0)
+            alpha_scheduler = cos_scheduler_increase(cfg.alpha, 0.01, 10000, 0)
             num_queries = 0
             flag = False
             lower_bond = torch.maximum(
@@ -239,6 +244,9 @@ def esal(
             delta, adv_image = init_delta_fun(cfg.initial_delta, shape, device,
                                               lower_bond, uppder_bond, epsilon, masks, sample_stragety.k, dims, last_delta, target_image)
             lr = cfg.scheduler.max_lr
+            l0_norm = torch.sum((delta != 0).float())
+            l2_norm = torch.norm(delta)
+            linf_norm = torch.max(torch.abs(delta))
             # # for iter in range(cfg.max_iters):
             for iter in range(cfg.max_query):
 
@@ -271,7 +279,9 @@ def esal(
                 else:
                     lr = next(lr_scheduler)
 
-                lr *= 2 if loss > 1 else 0.1
+                if loss>=1:
+                    lr*=0.1
+                        
 
                 delta = delta - lr * grads
 
@@ -300,14 +310,14 @@ def esal(
                 grad_estimator.max_sample_num_per_forward = sample_stragety.sample_num
                 grad_estimator.previous_grad_queue.append(grads.flatten())
                 grad_estimator.alpha = next(alpha_scheduler)
-
+                l0_norm = torch.sum((delta != 0).float())
+                l2_norm = torch.norm(delta, p=2)
+                linf_norm = torch.max(torch.abs(delta))
                 if iter % cfg.log_iters == 0:
                     print(
                         f'attack iter {iter}, loss: {loss.cpu():.5f}, group: {k}, spd: {sample_stragety.sample_num}, lr:{lr:.3f}')
 
-            l0_norm = torch.sum((delta != 0).float())
-            l2_norm = torch.norm(delta)
-            linf_norm = torch.max(torch.abs(delta))
+
             if targeted == 'untargeted':
                 return adv_image, flag, num_queries, l0_norm.cpu(), l2_norm.cpu(), linf_norm.cpu(), pred.cpu(), delta
             else:
@@ -317,25 +327,23 @@ def esal(
         return (targeted == 'untargeted' and pred != target_label) or (targeted == 'targeted' and pred == target_label)
 
     def get_k_gorups_delta(delta, masks, lower_bound, uppder_bound, k):
-        # clip the delta to satisfy l_inf norm
         pro_delta = torch.clip(delta, lower_bound, uppder_bound)
-        h = pro_delta ** 2 - 2 * pro_delta * delta  # shape: [1, image.shape]
-        unclip_delta = greedy_project(h, delta, masks.clone(), k)
-        unclip_delta = unclip_delta.resize(*shape)
-
+        Dis = pro_delta ** 2 - 2 * pro_delta * delta  # shape: [1, image.shape]
         if cfg.attack_all_pixels:
-
-
             pro_delta = pro_delta.flatten()
-            flatten_h = h.flatten()
-        min_k_idx = torch.topk(flatten_h, dim=0, k=dims, largest=True).indices
-        # delta_k = torch.zeros_like(pro_delta)
-        # delta_k[min_k_idx] = pro_delta[min_k_idx]
-        # delta = delta_k.reshape_as(target_img)
-        # ################
+            flatten_Dis = Dis.flatten()
+            min_k_idx = torch.topk(flatten_Dis, dim=0, k=dims, largest=True).indices
+            delta_k = torch.zeros_like(pro_delta)
+            delta_k[min_k_idx] = pro_delta[min_k_idx]
+            delta = delta_k.resize(*shape)
+        else:
+            # clip the delta to satisfy l_inf norm
+            unclip_delta = greedy_project(Dis, delta, masks.clone(), k)
+            delta = unclip_delta.resize(*shape)
+
 
         # clip the delta to satisfy l_inf norm
-        delta = torch.clip(unclip_delta, lower_bound, uppder_bound)
+        delta = torch.clip(delta, lower_bound, uppder_bound)
         return delta
 
     num_queries_list = []
@@ -437,6 +445,10 @@ def esal(
         l0_norm_list.append(l0_norm)
         l2_norm_list.append(l2_norm)
         linf_norm_list.append(linf_norm)
+        if l2_norm == float('nan'):
+            l2_norm_list.pop(-1)
+        if linf_norm == float('nan'):
+            linf_norm_list.pop(-1)
         psnr_list.append(calculate_psnr(orig_img, adv_img, dataset))
         ssim_list.append(calculate_ssim(orig_img, adv_img, dataset))
 
