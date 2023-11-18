@@ -6,19 +6,23 @@ from torch.utils.data import TensorDataset, DataLoader
 from optimizer import margin_loss, cross_entorpy_loss
 from l2l_zo.estimator import MetaZOEstimator
 import os
+from utils.general_utils import *
+import torchvision
 
 def get_model(dataset, path):
     if dataset == 'cifar10':
         from dataset_and_model.cifar import CIFARModelTorch
         model = CIFARModelTorch()
         model.load_state_dict(torch.load(path))
-
+        return model
+    elif dataset == 'imagenet':
+        model = torch.hub.load('pytorch/vision:v0.10.0',
+                            'inception_v3', pretrained=True)
         return model
 
 
 def get_dataset(dataset, path):
     if dataset == 'cifar10':
-        print(path)
         from dataset_and_model.cifar import CIFAR
         cifar_dataset = CIFAR(data_path=path, num_pic=10000)
         train_img, train_lab = cifar_dataset.train_data, cifar_dataset.train_labels
@@ -37,6 +41,11 @@ def get_dataset(dataset, path):
         val_loader = DataLoader(val_set, batch_size, shuffle=False)
 
         return train_loader, val_loader
+    elif dataset == 'imagenet':
+        from dataset_and_model.imagenet import get_imagenet_for_meta
+        train_path = '/media/mllab/yym/code/2/nips_FTAS/NES/datasets/imagenet/train'
+        train_loader, val_loader = get_imagenet_for_meta(path = train_path, train_num = 200, val_num = 50, image_size = 299)
+        return train_loader, val_loader
 
 
 @hydra.main(config_name='train_rnn', config_path='config', version_base=None)
@@ -52,9 +61,14 @@ def main(cfg: DictConfig):
 
     # 3. initial the zo_estimator
     max_batch_forward = cfg.max_batch_forward
+    attack_loss_fun = get_loss_fun(cfg.attack_loss_fun)
+    penalty_fun = get_loss_fun(cfg.penalty_fun)
     zo_estimator = MetaZOEstimator(
         sample_num=max_batch_forward,
         max_sample_num_per_forward=max_batch_forward,
+        attack_loss_fun=attack_loss_fun,
+        penalty_fun=penalty_fun,
+        penalty_eta = cfg.penalty_eta,
         targeted=cfg.targeted,
         grad_clip_threshold=cfg.dataset_and_model.grad_norm_threshold,
         device=device,
@@ -64,7 +78,9 @@ def main(cfg: DictConfig):
     # 4. initial the update rnn trainer
     trainer = MetaTrainer(
         model=model,
-        attack_loss=cross_entorpy_loss,
+        attack_loss_fun=attack_loss_fun,
+        penalty_fun=penalty_fun,
+        penalty_eta=cfg.penalty_eta,
         zo_estimator=zo_estimator,
         device=device,
         targeted=cfg.targeted,
@@ -72,7 +88,7 @@ def main(cfg: DictConfig):
         num_classes=cfg.dataset_and_model.num_classes,
     )
 
-    checkpoint_path_update_rnn = 'model_files/l2lzo/cifar10/update_rnn/'
+    checkpoint_path_update_rnn = f'model_files/l2lzo/update_rnn/{cfg.dataset_and_model.name}/{cfg.dataset_and_model.dataset_and_model.model_type}/{cfg.targeted}/'
     if not os.path.exists(checkpoint_path_update_rnn):
         os.makedirs(checkpoint_path_update_rnn)
 
@@ -90,14 +106,14 @@ def main(cfg: DictConfig):
         checkpoint_interval=cfg.checkpoint_interval,
     )
 
-    checkpoint_path_query_rnn = 'model_files/l2lzo/cifar10/query_rnn/'
+    checkpoint_path_query_rnn = f'model_files/l2lzo/query_rnn/{cfg.dataset_and_model.name}/{cfg.dataset_and_model.dataset_and_model.model_type}/{cfg.targeted}/'
     if not os.path.exists(checkpoint_path_query_rnn):
         os.makedirs(checkpoint_path_query_rnn)
 
     trainer.train(
         train_loader=train_loader,
         test_loader=val_loader,
-        epoch_num=cfg.epochs,
+        epoch_num=cfg.epoch,
         train_update_steps=cfg.train_update_steps,
         test_update_steps=cfg.test_update_steps,
         tbptt_steps=cfg.tbptt_steps,

@@ -27,10 +27,12 @@ class MetaTrainer:
     def __init__(
         self,
         model: nn.Module,
-        attack_loss: Callable,
         zo_estimator: MetaZOEstimator,
         device: torch.device,
         targeted: str,
+        attack_loss_fun: callable,
+        penalty_fun: callable,
+        penalty_eta: float = 0.1,
         max_sample_num_per_forward: int = 128,
         num_classes: int = 10,
     ) -> None:
@@ -48,7 +50,9 @@ class MetaTrainer:
             'targeted', 'untargeted'], "targeted must be either 'targeted' or 'untargeted'"
         zo_estimator = zo_estimator.to(device)
         self.model = model.eval().to(device)
-        self.attack_loss = attack_loss
+        self.attack_loss_fun = attack_loss_fun
+        self.penalty_fun = penalty_fun
+        self.penalty_eta = penalty_eta
         self.zo_estimator = zo_estimator
         self.device = device
         self.targeted = targeted
@@ -101,7 +105,7 @@ class MetaTrainer:
                 lr=lr
             )
             print(
-                f"Epoch: {epoch}, Decrease in Loss: {decrease_in_loss}, Final Loss: {final_loss}")
+                f"Epoch: {epoch}, Decrease in Loss: {decrease_in_loss:.4f}, Final Loss: {final_loss:.4f}")
 
             test_loss, loss_ratio = self._test_one_epoch(
                 test_loader=test_loader,
@@ -134,36 +138,45 @@ class MetaTrainer:
         decrease_in_loss = 0.0
         final_loss = 0.0
         self.zo_estimator.train()
-        evaluate_img, target = next(iter(train_loader))
-        evaluate_img, target = evaluate_img.to(
-            self.device), target.to(self.device)
 
-        target = F.one_hot(target, num_classes=self.num_classes)
-        adversial_img = evaluate_img.detach().clone().requires_grad_(True)
-        output = self.model(evaluate_img)
-        initial_loss = self.attack_loss(output, target, self.targeted).item()
-        print("initial loss: ", initial_loss)
+        initial_img, target = next(iter(train_loader))
+        initial_img, target = initial_img.to(
+            self.device), target.to(self.device)
+        onehot_target = F.one_hot(target, num_classes=self.num_classes)
+        adversarial_img = initial_img.detach().clone().requires_grad_(True)
+        output = self.model(adversarial_img)
+
+        attack_loss = self.attack_loss_fun(
+            output, onehot_target, self.targeted).item()
+        penalty_loss = self.penalty_fun(
+            adversarial_img, initial_img, self.penalty_eta)
+        initial_loss = attack_loss + penalty_loss
+        print("\ninitial loss: ", initial_loss.item())
 
         for k in range(update_steps // tbptt_steps):
-            self._reset_state(adversial_img, k)
+            self._reset_state(adversarial_img, k)
             loss_sum = 0
 
             for j in range(tbptt_steps):
                 delta, previous_loss, regularize_loss = self.zo_estimator.zo_estimation(
                     model=self.model,
-                    evaluate_img=evaluate_img,
-                    target_labels=target,
-                    attack_loss=self.attack_loss,
+                    evaluate_img=adversarial_img,
+                    initial_img=initial_img,
+                    target_labels=onehot_target,
                     skip_query_rnn=skip_query_rnn,
                     skip_update_rnn=skip_update_rnn,
                     lr=lr
                 )
                 previous_loss = previous_loss.detach()
-                delta = delta.reshape_as(adversial_img)
-                adversial_img = adversial_img + delta
-                adversial_img = adversial_img.clamp(-0.5, 0.5)
-                output = self.model(adversial_img)
-                loss = self.attack_loss(output, target, self.targeted)
+                delta = delta.reshape_as(adversarial_img)
+                adversarial_img = adversarial_img + delta
+                adversarial_img = adversarial_img.clamp(-0.5, 0.5)
+                output = self.model(adversarial_img)
+                loss = self.attack_loss_fun(
+                    output, onehot_target, self.targeted)
+                loss = loss + \
+                    self.penalty_fun(
+                        adversarial_img, initial_img, self.penalty_eta)
 
                 loss_sum += (k * tbptt_steps + j) * (loss - previous_loss)
                 loss_sum += regularize_loss
@@ -175,8 +188,8 @@ class MetaTrainer:
                 self.zo_estimator.parameters(), 1)
             self.optimizer.step()
 
-        decrease_in_loss += loss.item() / initial_loss
-        final_loss += loss.item()
+        decrease_in_loss = decrease_in_loss + (loss.item() / initial_loss)
+        final_loss = final_loss + loss.item()
 
         return decrease_in_loss, final_loss
 
@@ -208,31 +221,35 @@ class MetaTrainer:
         loss_sum = 0
         loss_ratio = 0.0
 
-        for i, (evaluate_img, target) in enumerate(test_loader):
+        for i, (initial_img, target) in enumerate(test_loader):
             if i >= num_test_samples:
                 break
 
-            evaluate_img, target = evaluate_img.to(
+            initial_img, target = initial_img.to(
                 self.device), target.to(self.device)
-            output = self.model(evaluate_img)
-            target = F.one_hot(target, num_classes=self.num_classes)
-            init_loss = self.attack_loss(output, target, self.targeted).item()
-            adversial_img = evaluate_img.clone().detach().requires_grad_(False)
+            output = self.model(initial_img)
+            onehot_target = F.one_hot(target, num_classes=self.num_classes)
+            adversial_img = initial_img.clone().detach().requires_grad_(False)
+            attack_loss = self.attack_loss_fun(
+                output, onehot_target, self.targeted).item()
+            penalty_loss = self.penalty_fun(
+                adversial_img, initial_img, self.penalty_eta)
+            init_loss = attack_loss + penalty_loss
             self.zo_estimator.reset_state(keep_states=False)
 
             for k in range(update_steps):
                 delta, test_loss, _ = self.zo_estimator.zo_estimation(
                     model=self.model,
-                    evaluate_img=evaluate_img,
-                    target_labels=target,
-                    attack_loss=self.attack_loss,
+                    evaluate_img=adversial_img,
+                    initial_img=initial_img,
+                    target_labels=onehot_target,
                     skip_query_rnn=skip_query_rnn,
                     skip_update_rnn=skip_update_rnn,
                     lr=lr
                 )
                 test_loss = test_loss.detach()
                 delta = delta.reshape_as(adversial_img)
-                adversial_img += delta
+                adversial_img = adversial_img + delta
                 adversial_img = torch.clip(adversial_img, -0.5, 0.5)
 
             # use last loss as the final loss

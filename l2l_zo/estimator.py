@@ -32,7 +32,7 @@ class MetaZOEstimator(nn.Module):
     - save(epoch, checkpoint_path, best): Saves the model state to a checkpoint.
     - reset_state(keep_states): Resets the state of the LSTM.
     - forward(grad): Performs a forward pass on the gradient.
-    - zo_estimation(model, evaluate_img, target_labels, attack_loss, skip_query_rnn, skip_update_rnn, lr): Performs a zeroth order optimization estimation.
+    - zo_estimation(model, evaluate_img, target_labels, attack_loss_fun, skip_query_rnn, skip_update_rnn, lr): Performs a zeroth order optimization estimation.
     """
 
     def __init__(
@@ -43,11 +43,14 @@ class MetaZOEstimator(nn.Module):
         grad_clip_threshold: float,
         device: torch.device,
         flattened_input_dim: int,
+        attack_loss_fun: Callable,
+        penalty_fun: Callable,
+        penalty_eta: float = 0.1,
         num_layers: int = 1,
         input_dim: int = 1,
         hidden_size: int = 10,
         normalize: bool = True,
-        reg_lambda: float = 0.1
+        reg_lambda: float = 0.1,
     ) -> None:
         """
         Initializes the Estimator class.
@@ -75,6 +78,9 @@ class MetaZOEstimator(nn.Module):
         self.normalize = normalize
         self.flattened_input_dim = flattened_input_dim
         self.reg_lambda = reg_lambda
+        self.attack_loss_fun = attack_loss_fun
+        self.penalty_eta = penalty_eta
+        self.penalty_fun = penalty_fun
 
         # init state of the update rnn, query u rnn
         self.step = None
@@ -116,7 +122,6 @@ class MetaZOEstimator(nn.Module):
             size=(self.flattened_input_dim,), device=self.device, requires_grad=False)
         self.previous_param_update = torch.zeros(
             size=(self.flattened_input_dim,), device=self.device, requires_grad=False)
-
 
     def load(self, checkpoint_path, freeze_update_rnn: bool):
         """
@@ -190,12 +195,12 @@ class MetaZOEstimator(nn.Module):
         else:
             self.previous_grad_estimation = self.previous_grad_estimation.detach().clone()
             self.previous_param_update = self.previous_param_update.detach().clone()
-            h,c = self.query_u_rnn_state
+            h, c = self.query_u_rnn_state
             self.query_u_rnn_state = (
                 h.detach().clone(),
                 c.detach().clone()
             )
-            h,c = self.update_rnn_state
+            h, c = self.update_rnn_state
             self.update_rnn_state = (
                 h.detach().clone(),
                 c.detach().clone()
@@ -225,8 +230,8 @@ class MetaZOEstimator(nn.Module):
         self,
         model: nn.Module,
         evaluate_img: torch.Tensor,
+        initial_img: torch.Tensor,
         target_labels: torch.Tensor,
-        attack_loss: Callable,
         skip_query_rnn: bool = False,
         skip_update_rnn: bool = False,
         lr: float = 0.001,
@@ -238,7 +243,6 @@ class MetaZOEstimator(nn.Module):
             model (nn.Module): The model to estimate the gradient for.
             evaluate_img (torch.Tensor): The input image to estimate the gradient for.
             target_labels (torch.Tensor): The target labels for the attack.
-            attack_loss (Callable): The loss function to use for the attack.
             skip_query_rnn (bool, optional): Whether to skip the query RNN step. Defaults to False.
             skip_update_rnn (bool, optional): Whether to skip the update RNN step. Defaults to False.
             lr (float, optional): The learning rate to use for the update step when skip update rnn. Defaults to 0.001.
@@ -274,12 +278,12 @@ class MetaZOEstimator(nn.Module):
 
         grad_accumulation_steps = self.sample_num // self.max_sample_num_per_forward
         grad_list = []
-        
-        def loss_fn(evaluate_imgs):
+
+        def _attack_loss(evaluate_imgs):
             evaluate_imgs = evaluate_imgs.reshape(-1, *evaluate_img.shape[1:])
             prediction = model(evaluate_imgs)
-            return attack_loss(prediction, target_labels.repeat(evaluate_imgs.size(0), 1), self.targeted)
-        
+            return self.attack_loss_fun(prediction, target_labels.repeat(evaluate_imgs.size(0), 1), self.targeted)
+
         for _ in range(grad_accumulation_steps):
             perturbation = torch.randn(
                 (self.max_sample_num_per_forward // 2, self.flattened_input_dim),
@@ -289,13 +293,14 @@ class MetaZOEstimator(nn.Module):
                 perturbation = self.std * perturbation + self.mean
 
             grad, loss = _symmetric_differentiation(
-                loss_fn, evaluate_img, perturbation)
+                _attack_loss, evaluate_img, perturbation)
             grad_list.append(grad)
-            
-        
+
         total_grad = torch.mean(torch.stack(grad_list), dim=0)
-        true_loss = loss_fn(evaluate_img)
-        del loss_fn
+        penalty = self.penalty_fun(evaluate_img, initial_img, self.penalty_eta)
+
+        true_loss = _attack_loss(evaluate_img) + penalty
+        del _attack_loss
 
         if not skip_update_rnn:
             delta = self(total_grad)
@@ -325,7 +330,8 @@ def _symmetric_differentiation(
         Tuple[torch.Tensor, torch.Tensor]: Gradient from finite difference of the loss function and the loss.
     """
     perturbation = torch.cat([perturbation, -perturbation], dim=0)
-    losses = loss_fn(input.flatten() + perturbation)
+    adv_image = torch.clip(input.flatten() + perturbation, -0.5, 0.5)
+    losses = loss_fn(adv_image)
     # losses [2 * sample_num]
     # compute hardmard product of losses and perturbation
     losses = losses.view(-1, 1,)

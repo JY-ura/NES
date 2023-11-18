@@ -9,6 +9,9 @@ __all__ = ['cos_scheduler', 'Momentum']
 default_device = torch.device(0)
 
 
+def l2_regular_loss(adv_image, init_image, eta=0.1):
+    return eta * torch.norm(adv_image - init_image, p=2) ** 2
+
 def cross_entorpy_loss(score, target_labels, targeted: str=False):
     target_labels = torch.argmax(target_labels, axis=-1)
     if targeted == 'untargeted':

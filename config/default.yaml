@@ -4,21 +4,28 @@ defaults:
   - scheduler: losslr
   
 log_iters: 10000000000
-gpu_idx: 0
+gpu_idx: 2
 parallel_device_num: 1
-attack_all_pixels: False
 save_image: False
 save_result: False
 load_pre_groups: True
 max_iters: 1000
 max_query: 20000
 targeted: untargeted
-subspace_dim: 2
-alpha: 0.5
-using_subspace: False
 
 initial_delta: random
+attack_all_pixels: False
+# if using margin_loss + regular term, set the eta
+attack_loss_fun: cross_entropy_loss #margin_loss
+penalty_fun: l2_regular_loss
+penalty_eta: 0.1
 
+# if using subspace, set using_subspace to True
+using_subspace: False
+subspace_dim: 2
+alpha: 0.5
+
+#if using wandb, set using_wandb to True
 wandb: False
 project: lr_scheduler
 name: ${dataset_and_model.name}_${scheduler.name}

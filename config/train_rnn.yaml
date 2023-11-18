@@ -1,9 +1,9 @@
 defaults:
-  - dataset_and_model: cifar10
+  - dataset_and_model: imagenet
   - setup: default
 
 
-epoch: 100
+epoch: 64
 warmup_epoch: 5
 use_amp: True
 train_update_steps: 16
@@ -11,11 +11,15 @@ test_update_steps: 16
 tbptt_steps: 4
 checkpoint_interval: 20
 lr: 0.01
-sample_num: 32
-max_sample_num_per_forward: 32
 targeted: untargeted
-max_batch_forward: 32
+max_batch_forward: 4
 
-gpu_idx: 1
+# if using margin_loss + regular term, set the eta
+attack_loss_fun: cross_entropy_loss
+penalty_fun: l2_regular_loss
+penalty_eta: 0.1
+
+
+gpu_idx: 3
 project: DNN attack-Train l2l
 entity: yura1213

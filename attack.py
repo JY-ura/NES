@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 from omegaconf import DictConfig
-from optimizer import Momentum, margin_loss, Adam, cos_scheduler_increase
+from optimizer import Momentum, Adam, cos_scheduler_increase
 from torch.nn import functional as F
 from utils.general_utils import *
 from torch.nn import DataParallel
@@ -12,7 +12,7 @@ from utils.select_groups import *
 import warnings
 warnings.filterwarnings('ignore')
 
-loss_fn = margin_loss
+# set random seed
 SEED = 0
 torch.random.initial_seed()
 torch.random.manual_seed(SEED)
@@ -167,7 +167,9 @@ def esal(
     else:
         max_group_num = round(1.0*dims.item()/filtersize.item() /
                             filtersize.item()/channels*perturb_pixels_ratio)
-    print(max_group_num)
+        
+    print('max_group_num:', max_group_num)
+
     device = torch.device(
         f"cuda:{cfg.gpu_idx}" if torch.cuda.is_available() else 'cpu')
     model = model.to(device)
@@ -212,7 +214,8 @@ def esal(
             target_label: torch.Tensor,
             masks: torch.Tensor,
             cfg: DictConfig,
-            last_delta: torch.Tensor):
+            last_delta: torch.Tensor,
+            ):
         """perform easl attack on target img 
 
         Args:
@@ -263,11 +266,16 @@ def esal(
                 target_labels = F.one_hot(target_label,
                                           num_classes=num_classes).repeat(grad_estimator.max_sample_num_per_forward, 1)
 
-                grads, loss = grad_estimator.zo_estimation(
+                grads, loss, regular_loss = grad_estimator.zo_estimation(
                     evaluate_img=adv_image,
+                    initial_img=target_image,
                     target_labels=target_labels,
                     subspace_estimation=cfg.using_subspace,
                 )
+                
+                if cfg.penalty_eta != 0:
+                    grads = grads + torch.autograd.grad(regular_loss, adv_image)[0]
+
                 grads = admm_transformer.apply_gradient(grad=grads)
                 sample_num, k = sample_stragety.update_sample_strategy(loss)
 
@@ -279,10 +287,10 @@ def esal(
                 else:
                     lr = next(lr_scheduler)
 
-                if loss>=1:
-                    lr*=0.1
+                # if loss>=1:
+                #     lr*=0.1
+                lr *= 2 if loss>1 else 0.1
                         
-
                 delta = delta - lr * grads
 
                 # get sparse k groups delta
@@ -389,6 +397,8 @@ def esal(
 
     i = 0
     index_fail = []
+    loss_fun = get_loss_fun(cfg.attack_loss_fun)
+    penalty_fun = get_loss_fun(cfg.penalty_fun)
     for image, orig_label, target_label in zip(images, labels, target_class):
         print("No. ", i+1)
         i += 1
@@ -403,7 +413,10 @@ def esal(
             grad_clip_threshold=d_m.grad_norm_threshold,
             alpha=cfg.alpha,
             subspace_dim=cfg.subspace_dim,
-            device=device
+            device=device,
+            attack_loss=loss_fun,
+            penalty_fun=penalty_fun,
+            penalty_eta=cfg.penalty_eta
         )
         
         sample_stragety = SampleStragegyScheduler(

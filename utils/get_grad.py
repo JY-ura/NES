@@ -1,7 +1,7 @@
 import torch
 from typing import Tuple
 import torch.nn as nn
-from optimizer import margin_loss
+from optimizer import margin_loss, l2_regular_loss
 from typing import Optional
 import math
 
@@ -17,6 +17,9 @@ class ZOEstimator(nn.Module):
         device: torch.device,
         alpha: float=0.5,
         subspace_dim: int=10,
+        attack_loss: callable=margin_loss,
+        penalty_fun: callable=l2_regular_loss,
+        penalty_eta: float=0.1,
     ) -> None:
         """
         Zeroth Order Estimator for Black-box Adversarial Attacks.
@@ -40,7 +43,9 @@ class ZOEstimator(nn.Module):
         self.grad_clip_threshold = grad_clip_threshold
         self.subspace_dim = subspace_dim
         self.device = device
-        self.loss_func = margin_loss
+        self.attack_loss = attack_loss
+        self.penalty_fun = penalty_fun
+        self.penalty_eta = penalty_eta
         
         self.sample_num = sample_num
         self.alpha = alpha
@@ -54,8 +59,9 @@ class ZOEstimator(nn.Module):
     def zo_estimation(
         self,
         evaluate_img: torch.Tensor,
+        initial_img: torch.Tensor,
         target_labels: torch.Tensor,
-        subspace_estimation: bool = False
+        subspace_estimation: bool = False,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Estimate the gradient of the loss function using zeroth order optimization.
@@ -105,7 +111,8 @@ class ZOEstimator(nn.Module):
             evaluate_imgs = evaluate_img + perturbation
 
             prediction = self.model(evaluate_imgs)
-            loss = self.loss_func(prediction, target_labels, self.targeted)
+            penalty_loss = self.penalty_fun(evaluate_imgs, initial_img, self.penalty_eta)
+            loss = self.attack_loss(prediction, target_labels, self.targeted) + penalty_loss
 
             loss = loss.reshape(-1, 1, 1, 1).repeat(evaluate_img.shape)
             grad = loss * perturbation / self.sigma / 2
@@ -126,7 +133,7 @@ class ZOEstimator(nn.Module):
             total_loss, device=self.device), dim=0)
 
         # self.previous_grads = total_grads.detach().clone()
-        return total_grads, total_loss.detach()
+        return total_grads, total_loss.detach(), penalty_loss
 
     def subspace_sample(self, grads: torch.Tensor, d: int, sigma: float) -> torch.Tensor:
         """sample perturbation from subspace
@@ -164,5 +171,5 @@ class ZOEstimator(nn.Module):
             torch.Tensor: True loss of the input image.
         """
         score = self.model(evaluate_img)
-        loss = self.loss_func(score, target_labels, self.targeted)
+        loss = self.attack_loss(score, target_labels, self.targeted)
         return torch.squeeze(loss, 0)

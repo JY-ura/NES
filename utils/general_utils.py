@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 from skimage.metrics import structural_similarity as ssim
 from optimizer import cos_scheduler, step_lr_scheduler, loss_lr, clwars
 from utils.select_groups import greedy_project
+from optimizer import cross_entorpy_loss, margin_loss, l2_regular_loss
 
 def pseudorandom_target(index, total_indices, true_class):
     rng = np.random.RandomState(index)
@@ -180,3 +181,13 @@ class LossLRScheduler:
 def get_clwars_lr(delta, grads, max_lr, eta):
     lr = max_lr * eta * torch.norm(delta, p=2) / (torch.norm(grads, p=2) + 1e-6)
     return lr
+
+loss_func_dict = {
+    'margin_loss': margin_loss,
+    'cross_entropy_loss': cross_entorpy_loss,
+    'l2_regular_loss': l2_regular_loss
+}
+
+def get_loss_fun(name):
+    print(f'load {name} loss function.')
+    return loss_func_dict[name]

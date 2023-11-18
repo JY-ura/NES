@@ -102,3 +102,14 @@ def get_dataset_and_model(data_path: str, num_pics: int, model_path, model_type:
     images, labels = get_imgnet_images(
         imgagenet_path=data_path, num_pics=num_pics, image_size=image_size)
     return images, labels, model
+
+
+def get_imagenet_for_meta(path, train_num, val_num, image_size):
+    dataset = ImageNet(path, image_size)
+    # divide the dataset into trian_dataset and val_dataset
+    train_dataset, val_dataset = torch.utils.data.random_split(
+        dataset, [0.9, 0.1], generator=torch.Generator().manual_seed(42))
+    train_loader = DataLoader(train_dataset, batch_size=1, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=1, shuffle=False)
+    return train_loader, val_loader
+
